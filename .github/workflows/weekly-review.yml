@@ -45,7 +45,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # TODO: if claude-opus-4-7 is rejected at runtime, switch to claude-sonnet-4-6
-          claude_args: "--model claude-opus-4-7 --max-turns 25"
+          claude_args: "--model claude-opus-4-7 --max-turns 50"
           prompt: |
             You are a weekly trading research agent. Read CLAUDE.md for your full
             role and rules, then execute the steps below in order.

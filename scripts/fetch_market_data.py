@@ -170,8 +170,8 @@ def fetch_fred_series() -> str:
     sep = "|--------|------|-------|------|"
     rows: list[str] = []
 
-    end = datetime.utcnow().strftime("%Y-%m-%d")
-    start = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    end = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d")
+    start = (datetime.now(ZoneInfo("UTC")) - timedelta(days=30)).strftime("%Y-%m-%d")
 
     for series_id, name in FRED_SERIES.items():
         try:
