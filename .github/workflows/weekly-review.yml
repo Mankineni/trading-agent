@@ -87,7 +87,10 @@ jobs:
         run: python scripts/render_dashboard.py
 
       - name: Commit and push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
           git add docs/ memory/trade_log.md memory/learnings.md memory/market_snapshot.md
           git diff --cached --quiet || git commit -m "weekly review: $(date -u +%Y-%m-%d)"
           git push
