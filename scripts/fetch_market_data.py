@@ -180,7 +180,7 @@ def fetch_fred_series() -> str:
                 f"?id={series_id}&cosd={start}&coed={end}"
             )
             req = urllib.request.Request(url, headers={"User-Agent": "trading-agent/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 text = resp.read().decode("utf-8")
 
             reader = csv.reader(io.StringIO(text))
