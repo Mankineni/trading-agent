@@ -80,12 +80,14 @@ jobs:
             - Append reflections to memory/learnings.md (use the format in CLAUDE.md).
             - Do NOT modify memory/portfolio.md or memory/watchlist.md.
 
-            ## 5. Render and commit
-            Run: python scripts/render_dashboard.py
-            Then commit all changed files:
-              git add docs/ memory/trade_log.md memory/learnings.md
-              git commit -m "weekly review: $(date -u +%Y-%m-%d)"
+            ## 5. Done
+            After writing all files, stop. The pipeline handles rendering and committing.
 
-      - name: Push changes
+      - name: Render dashboard
+        run: python scripts/render_dashboard.py
+
+      - name: Commit and push
         run: |
-          git diff --quiet HEAD origin/$(git branch --show-current) 2>/dev/null || git push
+          git add docs/ memory/trade_log.md memory/learnings.md memory/market_snapshot.md
+          git diff --cached --quiet || git commit -m "weekly review: $(date -u +%Y-%m-%d)"
+          git push
