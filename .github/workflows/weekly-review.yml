@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
-  id-token: write
 
 jobs:
   review:
@@ -68,35 +66,24 @@ jobs:
             cat memory/learnings.md
           } > _context.md
 
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Run research agent
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # TODO: if claude-opus-4-7 is rejected at runtime, switch to claude-sonnet-4-6
-          claude_args: "--model claude-opus-4-7 --max-turns 50"
-          prompt: |
-            You are a weekly trading research agent.
-
-            ALL of your context is in _context.md in the repo root. Read ONLY that
-            file — it contains CLAUDE.md, skills/*, and memory/* concatenated.
-            Do NOT read individual files from memory/ or skills/.
-
-            After reading _context.md, do exactly 3 writes:
-
-            1. WRITE docs/latest.md (overwrite) — the weekly report following the
-               template from skills/research.md. Use only prices from the
-               market_snapshot section. Never invent numbers. Max 1 new BUY per
-               portfolio rules. Every pick needs "Why I could be wrong". If this
-               is the first run, write "First run — no prior picks to grade" in
-               the retro section.
-
-            2. APPEND to memory/trade_log.md — a "## YYYY-MM-DD" section with
-               picks or "**No picks this week.**"
-
-            3. APPEND to memory/learnings.md — a "## YYYY-MM-DD" section with
-               1-3 bullet reflections.
-
-            Then STOP. The pipeline renders and commits.
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude --model claude-opus-4-7 --max-turns 50 --print \
+            "Read _context.md in the repo root — it has all your context \
+            (CLAUDE.md, skills/*, memory/* concatenated). Then do exactly 3 file writes: \
+            (1) Overwrite docs/latest.md with the weekly report following the research.md \
+            template. Use only prices from market_snapshot. Never invent numbers. Max 1 \
+            new BUY per portfolio rules. Every pick needs 'Why I could be wrong'. If no \
+            prior picks exist, write 'First run — no prior picks to grade' in the retro. \
+            (2) Append a '## $(date -u +%Y-%m-%d)' section to memory/trade_log.md with \
+            picks or '**No picks this week.**' \
+            (3) Append a '## $(date -u +%Y-%m-%d)' section to memory/learnings.md with \
+            1-3 bullet reflections. Then STOP."
 
       - name: Render dashboard
         run: python scripts/render_dashboard.py
