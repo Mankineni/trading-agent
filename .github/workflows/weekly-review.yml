@@ -40,48 +40,61 @@ jobs:
           git config user.name "trading-agent[bot]"
           git config user.email "trading-agent[bot]@users.noreply.github.com"
 
+      - name: Bundle context for agent
+        run: |
+          {
+            echo "===== CLAUDE.md ====="
+            cat CLAUDE.md
+            echo ""
+            echo "===== skills/research.md ====="
+            cat skills/research.md
+            echo ""
+            echo "===== skills/risk_check.md ====="
+            cat skills/risk_check.md
+            echo ""
+            echo "===== memory/portfolio.md ====="
+            cat memory/portfolio.md
+            echo ""
+            echo "===== memory/watchlist.md ====="
+            cat memory/watchlist.md
+            echo ""
+            echo "===== memory/market_snapshot.md ====="
+            cat memory/market_snapshot.md
+            echo ""
+            echo "===== memory/trade_log.md ====="
+            cat memory/trade_log.md
+            echo ""
+            echo "===== memory/learnings.md ====="
+            cat memory/learnings.md
+          } > /tmp/agent_context.md
+
       - name: Run research agent
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # TODO: if claude-opus-4-7 is rejected at runtime, switch to claude-sonnet-4-6
-          claude_args: "--model claude-opus-4-7 --max-turns 50"
+          claude_args: "--model claude-opus-4-7 --max-turns 25"
           prompt: |
-            You are a weekly trading research agent. Read CLAUDE.md for your full
-            role and rules, then execute the steps below in order.
+            You are a weekly trading research agent.
 
-            ## 1. Read context
-            Read every file in memory/ and skills/. Pay special attention to:
-            - memory/market_snapshot.md  (fresh data — treat as authoritative)
-            - memory/portfolio.md        (current holdings and rules)
-            - memory/watchlist.md        (candidate tickers)
-            - memory/trade_log.md        (your prior recommendations)
-            - memory/learnings.md        (your prior reflections)
+            ALL of your context is in /tmp/agent_context.md — read that single file
+            first. It contains CLAUDE.md, skills/*, and memory/* concatenated together.
+            Do NOT read individual files from memory/ or skills/.
 
-            ## 2. Grade last week
-            If trade_log.md has entries from the most recent prior run, compare those
-            picks against this week's market_snapshot.md prices. Note what went right,
-            what went wrong, and why. Incorporate this into the Learnings section.
+            After reading context, do exactly these steps:
 
-            ## 3. Produce this week's thesis
-            Follow the output template in skills/research.md exactly.
-            Write the full report to docs/latest.md (overwrite).
+            1. WRITE docs/latest.md — follow the template from skills/research.md exactly.
+               Grade last week if trade_log.md has prior entries. Use only prices from
+               market_snapshot.md — never invent numbers. Max 1 new BUY (per portfolio
+               rules). Every pick needs "Why I could be wrong".
 
-            Hard constraints — violating any of these is a failure:
-            - NEVER invent, estimate, or hallucinate a price. Every number must come
-              from market_snapshot.md or be explicitly marked "[estimated]".
-            - Maximum 3 new BUY picks per week. Zero is valid and often correct.
-            - Maximum 3 SELL picks per week.
-            - Every pick MUST include a "Why I could be wrong" section.
-            - Enforce all rules in skills/risk_check.md before recommending.
+            2. APPEND to memory/trade_log.md — add a "## YYYY-MM-DD" section with picks
+               (or "No picks this week.").
 
-            ## 4. Update memory
-            - Append this week's picks to memory/trade_log.md (use the format in CLAUDE.md).
-            - Append reflections to memory/learnings.md (use the format in CLAUDE.md).
-            - Do NOT modify memory/portfolio.md or memory/watchlist.md.
+            3. APPEND to memory/learnings.md — add a "## YYYY-MM-DD" section with
+               1-3 bullet reflections.
 
-            ## 5. Done
-            After writing all files, stop. The pipeline handles rendering and committing.
+            4. STOP. Do not render or commit — the pipeline handles that.
 
       - name: Render dashboard
         run: python scripts/render_dashboard.py
