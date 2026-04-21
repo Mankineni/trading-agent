@@ -73,7 +73,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          claude --model claude-opus-4-7 --max-turns 50 --dangerously-skip-permissions -p \
+          claude --model claude-sonnet-4-6 --max-turns 50 --dangerously-skip-permissions -p \
             "Read _context.md in the repo root — it has all your context \
             (CLAUDE.md, skills/*, memory/* concatenated). Then do exactly 3 file writes: \
             (1) Overwrite docs/latest.md with the weekly report following the research.md \
