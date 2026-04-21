@@ -4,3 +4,7 @@ __pycache__/
 .env
 .DS_Store
 _context.md
+
+# Regenerated every run by fetch_market_data.py (or seed_snapshot.py for local design work).
+# Never committed — the relevant numbers end up in docs/latest.md instead.
+memory/market_snapshot.md

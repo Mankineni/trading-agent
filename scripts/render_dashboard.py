@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Render docs/latest.md + recent trade_log entries → docs/index.html.
+"""Render weekly dashboard -> docs/index.html.
 
-Produces a single self-contained HTML file for GitHub Pages.
+Parses docs/latest.md + memory/*.md (read-only) into a multi-section,
+self-contained HTML dashboard for GitHub Pages.
+
+Sections: decision banner, macro backdrop, allocation donut, holdings table,
+watchlist cards, decision timeline, flags, collapsed full prose report.
 """
 
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 import markdown
@@ -14,40 +19,724 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 MEMORY = ROOT / "memory"
 
-MAX_LOG_SECTIONS = 6
+TIMELINE_WEEKS = 12
+RING_FENCED_MOVE_PCT = 10.0
+STALE_SNAPSHOT_DAYS = 8
+MIN_CASH_RESERVE_EUR = 50.0
 
 
 # ---------------------------------------------------------------------------
-# Extract recent trade-log sections
+# Parsers
 # ---------------------------------------------------------------------------
 
-def extract_recent_sections(text: str, n: int) -> str:
-    """Return the most recent `n` '## YYYY-MM-DD' sections from trade_log.md."""
-    # Strip HTML comments (the format example block in trade_log.md)
+def parse_markdown_table(block: str) -> list[dict]:
+    """Parse a single pipe-table block into list[dict] keyed by header."""
+    lines = [l.strip() for l in block.splitlines() if l.strip().startswith("|")]
+    if len(lines) < 2:
+        return []
+
+    def cells(line: str) -> list[str]:
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    header = cells(lines[0])
+    out: list[dict] = []
+    for line in lines[1:]:
+        c = cells(line)
+        if all(set(x).issubset({"-", ":", " "}) for x in c):
+            continue
+        if len(c) != len(header):
+            continue
+        out.append(dict(zip(header, c)))
+    return out
+
+
+def parse_all_tables(text: str) -> list[list[dict]]:
+    """Find every contiguous pipe-table block in text."""
+    tables: list[list[dict]] = []
+    buf: list[str] = []
+    for line in text.splitlines():
+        if line.strip().startswith("|"):
+            buf.append(line)
+        else:
+            if buf:
+                t = parse_markdown_table("\n".join(buf))
+                if t:
+                    tables.append(t)
+                buf = []
+    if buf:
+        t = parse_markdown_table("\n".join(buf))
+        if t:
+            tables.append(t)
+    return tables
+
+
+def safe_float(s) -> float | None:
+    if s is None:
+        return None
+    s = str(s).strip().replace(",", "").replace("€", "").replace("$", "")
+    if not s or s in {"—", "-", "ERROR", "N/A", "TBD"}:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def safe_pct(s) -> float | None:
+    """'+3.1%' -> 3.1, '—' -> None."""
+    if s is None:
+        return None
+    s = str(s).strip().replace(",", "").rstrip("%")
+    if not s or s in {"—", "-", "ERROR", "N/A"}:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def parse_portfolio(text: str) -> dict:
+    cash = None
+    sparplan = None
+    for line in text.splitlines():
+        m = re.search(r"Free cash[^:]*:\s*\*\*€([\d,.]+)\*\*", line)
+        if m:
+            cash = safe_float(m.group(1))
+        m = re.search(r"Monthly Sparplan[^:]*:\s*\*\*€([\d,.]+)\*\*", line)
+        if m:
+            sparplan = safe_float(m.group(1))
+
+    holdings: list[dict] = []
+    after = text.split("## Current holdings", 1)
+    if len(after) == 2:
+        section = re.split(r"^##\s", after[1], maxsplit=1, flags=re.MULTILINE)[0]
+        tables = parse_all_tables(section)
+        if tables:
+            for row in tables[0]:
+                ticker = row.get("Ticker", "").strip()
+                if not ticker or ticker.startswith("EXAMPLE"):
+                    continue
+                qty = safe_float(row.get("Quantity"))
+                avg_cost = safe_float(row.get("Avg. cost"))
+                if qty is None or avg_cost is None:
+                    continue
+                holdings.append({
+                    "ticker": ticker,
+                    "isin": row.get("ISIN", "").strip(),
+                    "name": row.get("Name", "").strip(),
+                    "qty": qty,
+                    "avg_cost": avg_cost,
+                    "currency": (row.get("Currency", "").strip() or "EUR"),
+                    "purchased": row.get("Purchased", "").strip(),
+                    "status": row.get("Status", "").strip() or "active",
+                })
+    return {"cash": cash, "sparplan": sparplan, "holdings": holdings}
+
+
+def parse_watchlist(text: str) -> list[dict]:
+    after = text.split("## Candidates I'd consider buying", 1)
+    if len(after) != 2:
+        return []
+    section = re.split(r"^##\s", after[1], maxsplit=1, flags=re.MULTILINE)[0]
+    tables = parse_all_tables(section)
+    if not tables:
+        return []
+    out: list[dict] = []
+    for row in tables[0]:
+        ticker = row.get("Ticker", "").strip()
+        if not ticker:
+            continue
+        # Notes column header varies: "Why it's on the list" or "Notes"
+        notes = row.get("Why it's on the list") or row.get("Notes") or ""
+        out.append({
+            "ticker": ticker,
+            "isin": row.get("ISIN", "").strip(),
+            "name": row.get("Name", "").strip(),
+            "ucits": row.get("UCITS", "").strip(),
+            "ter": row.get("TER", "").strip(),
+            "notes": notes.strip(),
+        })
+    return out
+
+
+def parse_market_snapshot(text: str) -> dict:
+    if not text:
+        return {"tickers": {}, "fred": [], "missing": [], "generated_at": None, "stale": False}
+
+    generated_at = None
+    m = re.search(r"Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
+    if m:
+        try:
+            generated_at = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+
+    tickers: dict[str, dict] = {}
+    after_wl = text.split("## Watchlist", 1)
+    if len(after_wl) == 2:
+        section = re.split(r"^##\s", after_wl[1], maxsplit=1, flags=re.MULTILINE)[0]
+        tables = parse_all_tables(section)
+        if tables:
+            for row in tables[0]:
+                ticker = row.get("Ticker", "").strip()
+                if not ticker:
+                    continue
+                tickers[ticker] = {
+                    "currency": row.get("Currency", "").strip(),
+                    "close": safe_float(row.get("Close")),
+                    "1d": safe_pct(row.get("1d")),
+                    "1w": safe_pct(row.get("1w")),
+                    "1m": safe_pct(row.get("1m")),
+                    "3m": safe_pct(row.get("3m")),
+                    "ytd": safe_pct(row.get("YTD")),
+                    "low52": safe_float(row.get("52w Low")),
+                    "high52": safe_float(row.get("52w High")),
+                    "pe": safe_float(row.get("P/E")),
+                    "mcap": row.get("Mkt Cap", "").strip(),
+                }
+
+    fred: list[dict] = []
+    after_fred = text.split("## Macro Indicators", 1)
+    if len(after_fred) == 2:
+        section = re.split(r"^##\s", after_fred[1], maxsplit=1, flags=re.MULTILINE)[0]
+        tables = parse_all_tables(section)
+        if tables:
+            for row in tables[0]:
+                val = row.get("Value", "").strip()
+                fred.append({
+                    "series": row.get("Series", "").strip(),
+                    "name": row.get("Name", "").strip(),
+                    "value": val,
+                    "date": row.get("Date", "").strip(),
+                    "error": val.upper() == "ERROR",
+                })
+
+    missing: list[str] = []
+    after_miss = text.split("## Missing", 1)
+    if len(after_miss) == 2:
+        for line in after_miss[1].splitlines():
+            m = re.match(r"^\s*-\s*`([^`]+)`", line)
+            if m:
+                missing.append(m.group(1))
+
+    stale = False
+    if generated_at:
+        stale = (datetime.now() - generated_at).days > STALE_SNAPSHOT_DAYS
+
+    return {
+        "tickers": tickers,
+        "fred": fred,
+        "missing": missing,
+        "generated_at": generated_at,
+        "stale": stale,
+    }
+
+
+def parse_trade_log(text: str, n: int | None = None) -> list[dict]:
+    """Return list newest-first of {date, buys, sells, no_picks, raw}."""
     text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
-    # Split on ## headings that look like dates
-    parts = re.split(r"(?=^## \d{4}-\d{2}-\d{2})", text, flags=re.MULTILINE)
-    # Filter to only actual date sections
-    sections = [p for p in parts if re.match(r"^## \d{4}-\d{2}-\d{2}", p)]
-    # Most recent first (they're appended chronologically, so last = newest)
-    recent = sections[-n:] if len(sections) > n else sections
-    recent.reverse()
-    return "\n".join(recent).strip()
+    sections = re.split(r"(?=^## \d{4}-\d{2}-\d{2})", text, flags=re.MULTILINE)
+    out: list[dict] = []
+    for sec in sections:
+        m = re.match(r"^## (\d{4}-\d{2}-\d{2})", sec)
+        if not m:
+            continue
+        out.append({
+            "date": m.group(1),
+            "buys": [b.strip() for b in re.findall(r"\*\*BUY:\*\*\s*(.+)", sec)],
+            "sells": [s.strip() for s in re.findall(r"\*\*SELL:\*\*\s*(.+)", sec)],
+            "no_picks": "No picks this week" in sec,
+            "raw": sec.strip(),
+        })
+    out.reverse()
+    return out[:n] if n else out
+
+
+def parse_latest(text: str) -> dict:
+    regime = None
+    m = re.search(r"\b(risk-on|risk-off|caution|neutral)\b", text, re.IGNORECASE)
+    if m:
+        regime = m.group(1).lower()
+    date = None
+    m = re.match(r"^#\s+Weekly Research\s*[—-]\s*(\d{4}-\d{2}-\d{2})", text.strip())
+    if m:
+        date = m.group(1)
+    full_html = markdown.markdown(text, extensions=["tables", "fenced_code"])
+    return {"date": date, "regime": regime, "full_html": full_html}
 
 
 # ---------------------------------------------------------------------------
-# HTML template
+# Helpers
 # ---------------------------------------------------------------------------
 
-TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Weekly Trading Research</title>
-<style>
-:root {{
+def eur_value(qty: float | None, price: float | None, currency: str, eurusd: float | None) -> float | None:
+    if qty is None or price is None:
+        return None
+    if currency == "USD":
+        if not eurusd:
+            return None
+        return qty * price / eurusd
+    return qty * price
+
+
+def fmt_eur(v: float | None) -> str:
+    return "—" if v is None else f"€{v:,.2f}"
+
+
+def fmt_pct(v: float | None, sign: bool = True) -> str:
+    if v is None:
+        return "—"
+    return f"{v:+.1f}%" if sign else f"{v:.1f}%"
+
+
+def pct_class(v: float | None) -> str:
+    if v is None or v == 0:
+        return ""
+    return "up" if v > 0 else "down"
+
+
+def esc(s) -> str:
+    if s is None:
+        return ""
+    return (str(s)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+# ---------------------------------------------------------------------------
+# Section builders
+# ---------------------------------------------------------------------------
+
+def build_banner(trade_log: list[dict]) -> str:
+    if not trade_log:
+        return (
+            '<section class="banner banner-hold">'
+            '<div class="banner-label">Decision</div>'
+            '<div class="banner-value">HOLD</div>'
+            '<div class="banner-sub">No decisions logged yet.</div>'
+            '</section>'
+        )
+    latest = trade_log[0]
+    if latest["buys"]:
+        kind = "buy"
+        label = "BUY" if len(latest["buys"]) == 1 else f"BUY × {len(latest['buys'])}"
+        sub = esc(latest["buys"][0])
+        if latest["sells"]:
+            sub += f" · plus {len(latest['sells'])} SELL"
+    elif latest["sells"]:
+        kind = "sell"
+        label = "SELL" if len(latest["sells"]) == 1 else f"SELL × {len(latest['sells'])}"
+        sub = esc(latest["sells"][0])
+    else:
+        kind = "hold"
+        label = "HOLD"
+        sub = "No picks this week."
+    return (
+        f'<section class="banner banner-{kind}">'
+        f'<div class="banner-label">Decision · {esc(latest["date"])}</div>'
+        f'<div class="banner-value">{label}</div>'
+        f'<div class="banner-sub">{sub}</div>'
+        f'</section>'
+    )
+
+
+def build_macro(latest: dict, snapshot: dict) -> str:
+    regime = latest.get("regime")
+    if not regime:
+        vix = snapshot["tickers"].get("^VIX", {}).get("close")
+        if vix is None:
+            regime = "unknown"
+        elif vix < 15:
+            regime = "risk-on"
+        elif vix < 20:
+            regime = "neutral"
+        elif vix < 30:
+            regime = "caution"
+        else:
+            regime = "risk-off"
+
+    regime_class = {
+        "risk-on": "green",
+        "neutral": "grey",
+        "caution": "amber",
+        "risk-off": "red",
+        "unknown": "grey",
+    }.get(regime, "grey")
+
+    def tile(label: str, ticker: str, fred_id: str | None = None, fmt: str = "{:.2f}") -> str:
+        t = snapshot["tickers"].get(ticker, {})
+        val = t.get("close")
+        wk = t.get("1w")
+        if val is None and fred_id:
+            for f in snapshot["fred"]:
+                if f["series"] == fred_id and not f["error"]:
+                    val = safe_float(f["value"])
+                    break
+        val_str = fmt.format(val) if val is not None else "—"
+        delta_str = fmt_pct(wk) if wk is not None else "—"
+        delta_cls = pct_class(wk)
+        return (
+            f'<div class="kpi">'
+            f'<div class="kpi-label">{label}</div>'
+            f'<div class="kpi-value">{val_str}</div>'
+            f'<div class="kpi-delta {delta_cls}">{delta_str} 1w</div>'
+            f'</div>'
+        )
+
+    tiles = [
+        tile("VIX", "^VIX", "VIXCLS"),
+        tile("US 10Y", "^TNX", "DGS10"),
+        tile("EUR/USD", "EURUSD=X", "DEXUSEU", fmt="{:.4f}"),
+        tile("Gold (USD)", "GC=F", fmt="{:,.0f}"),
+    ]
+
+    gen = snapshot.get("generated_at")
+    gen_str = gen.strftime("%Y-%m-%d %H:%M") if gen else "unknown"
+    return (
+        '<section class="card">'
+        '<div class="section-label">Macro backdrop</div>'
+        f'<div class="regime regime-{regime_class}">Regime: <strong>{regime.upper()}</strong>'
+        f'<span class="muted small"> · snapshot {esc(gen_str)}</span></div>'
+        f'<div class="kpi-grid">{"".join(tiles)}</div>'
+        '</section>'
+    )
+
+
+def build_allocation(portfolio: dict, snapshot: dict, eurusd: float | None) -> str:
+    holdings = portfolio["holdings"]
+    cash = portfolio["cash"] or 0.0
+
+    slices = []
+    for h in holdings:
+        price = snapshot["tickers"].get(h["ticker"], {}).get("close")
+        val = eur_value(h["qty"], price, h["currency"], eurusd)
+        slices.append({"label": h["ticker"], "value": val})
+    if cash > 0:
+        slices.append({"label": "Cash", "value": cash})
+
+    priced = [s for s in slices if s["value"] is not None and s["value"] > 0]
+    total = sum(s["value"] for s in priced)
+    missing = [s["label"] for s in slices if s["value"] is None]
+
+    if total == 0:
+        note = '<p class="muted small">No priced holdings yet.</p>'
+        if missing:
+            note = f'<p class="muted small">No price for: {esc(", ".join(missing))}</p>'
+        return (
+            '<section class="card"><div class="section-label">Allocation</div>'
+            f'{note}</section>'
+        )
+
+    palette = ["#4c9aff", "#5bd17a", "#f5a524", "#9d8cfa",
+               "#f66d6d", "#35c4d1", "#d48ee3", "#8aa1b8"]
+    r, cx, cy = 70, 90, 90
+    C = 2 * 3.141592653589793 * r
+
+    svg_slices = []
+    legend = []
+    offset = 0.0
+    for i, s in enumerate(priced):
+        pct = s["value"] / total
+        dash = pct * C
+        color = palette[i % len(palette)]
+        svg_slices.append(
+            f'<circle r="{r}" cx="{cx}" cy="{cy}" fill="transparent" '
+            f'stroke="{color}" stroke-width="28" '
+            f'stroke-dasharray="{dash:.2f} {C - dash:.2f}" '
+            f'stroke-dashoffset="{-offset:.2f}" '
+            f'transform="rotate(-90 {cx} {cy})"><title>{esc(s["label"])}: {fmt_eur(s["value"])} ({pct*100:.1f}%)</title></circle>'
+        )
+        legend.append(
+            f'<div class="legend-row">'
+            f'<span class="swatch" style="background:{color}"></span>'
+            f'<span class="legend-label">{esc(s["label"])}</span>'
+            f'<span class="legend-pct">{pct*100:.1f}%</span>'
+            f'<span class="legend-val">{fmt_eur(s["value"])}</span>'
+            f'</div>'
+        )
+        offset += dash
+
+    missing_note = ""
+    if missing:
+        missing_note = f'<p class="muted small">No price for: {esc(", ".join(missing))} — excluded from total.</p>'
+
+    return (
+        '<section class="card">'
+        '<div class="section-label">Allocation</div>'
+        '<div class="alloc-wrap">'
+        '<svg viewBox="0 0 180 180" class="donut" role="img" aria-label="Portfolio allocation">'
+        f'<circle r="{r}" cx="{cx}" cy="{cy}" fill="transparent" stroke="var(--border)" stroke-width="28"/>'
+        f'{"".join(svg_slices)}'
+        f'<text x="{cx}" y="{cy - 2}" text-anchor="middle" class="donut-total">{fmt_eur(total)}</text>'
+        f'<text x="{cx}" y="{cy + 14}" text-anchor="middle" class="donut-sub">total</text>'
+        '</svg>'
+        f'<div class="legend">{"".join(legend)}</div>'
+        '</div>'
+        f'{missing_note}'
+        '</section>'
+    )
+
+
+def build_holdings(portfolio: dict, snapshot: dict, eurusd: float | None) -> str:
+    holdings = portfolio["holdings"]
+    if not holdings:
+        return (
+            '<section class="card">'
+            '<div class="section-label">Holdings</div>'
+            '<p class="muted">No positions in portfolio.md.</p>'
+            '</section>'
+        )
+
+    rows_data = []
+    max_abs_pnl = 0.0
+    for h in holdings:
+        t = snapshot["tickers"].get(h["ticker"], {})
+        price = t.get("close")
+        wk = t.get("1w")
+        val_eur = eur_value(h["qty"], price, h["currency"], eurusd)
+        pnl_eur = None
+        pnl_pct = None
+        if price is not None and h["avg_cost"] > 0:
+            pnl_pct = (price / h["avg_cost"] - 1) * 100
+            cost_eur = eur_value(h["qty"], h["avg_cost"], h["currency"], eurusd)
+            if val_eur is not None and cost_eur is not None:
+                pnl_eur = val_eur - cost_eur
+            max_abs_pnl = max(max_abs_pnl, abs(pnl_pct))
+        rows_data.append({
+            "h": h, "price": price, "wk": wk,
+            "val_eur": val_eur, "pnl_eur": pnl_eur, "pnl_pct": pnl_pct,
+        })
+
+    scale = max(max_abs_pnl, 10.0)
+
+    rows_html = []
+    for d in rows_data:
+        h = d["h"]
+        ccy = h["currency"]
+        price_str = f"{d['price']:.2f} {ccy}" if d["price"] is not None else "— " + ccy
+        wk_str = fmt_pct(d["wk"]) if d["wk"] is not None else "—"
+        wk_cls = pct_class(d["wk"])
+
+        badge = ""
+        if h["status"] == "ring-fenced":
+            badge = ' <span class="badge badge-ring">ring-fenced</span>'
+        elif h["status"] and h["status"] != "active":
+            badge = f' <span class="badge">{esc(h["status"])}</span>'
+
+        if d["pnl_pct"] is None:
+            pnl_bar = '<div class="pnl-bar pnl-bar-empty"></div>'
+            pnl_text = '<span class="muted">—</span>'
+        else:
+            frac = min(abs(d["pnl_pct"]) / scale, 1.0)
+            width_pct = frac * 50
+            if d["pnl_pct"] != 0 and width_pct < 2.0:
+                width_pct = 2.0
+            side = "right" if d["pnl_pct"] >= 0 else "left"
+            cls = "up" if d["pnl_pct"] >= 0 else "down"
+            pnl_bar = (
+                '<div class="pnl-bar">'
+                '<div class="pnl-mid"></div>'
+                f'<div class="pnl-fill pnl-{side} {cls}" style="width:{width_pct:.1f}%"></div>'
+                '</div>'
+            )
+            parts = [fmt_pct(d["pnl_pct"])]
+            if d["pnl_eur"] is not None:
+                parts.append(f"({fmt_eur(d['pnl_eur'])})")
+            pnl_text = f'<span class="{cls}">{" ".join(parts)}</span>'
+
+        qty_str = f"{h['qty']:.4f}".rstrip("0").rstrip(".")
+        rows_html.append(
+            '<tr>'
+            f'<td><strong>{esc(h["ticker"])}</strong>{badge}'
+            f'<div class="muted small">{esc(h["name"])}</div></td>'
+            f'<td class="num">{qty_str}</td>'
+            f'<td class="num">{h["avg_cost"]:.2f} {ccy}</td>'
+            f'<td class="num">{price_str}</td>'
+            f'<td class="num">{fmt_eur(d["val_eur"])}</td>'
+            f'<td class="pnl-cell">{pnl_bar}<div class="pnl-text">{pnl_text}</div></td>'
+            f'<td class="num {wk_cls}">{wk_str}</td>'
+            '</tr>'
+        )
+
+    return (
+        '<section class="card">'
+        '<div class="section-label">Holdings</div>'
+        '<div class="table-wrap"><table class="holdings"><thead><tr>'
+        '<th>Position</th><th class="num">Qty</th><th class="num">Avg cost</th>'
+        '<th class="num">Current</th><th class="num">Value (EUR)</th>'
+        '<th>P&amp;L</th><th class="num">1w</th>'
+        f'</tr></thead><tbody>{"".join(rows_html)}</tbody></table></div>'
+        '</section>'
+    )
+
+
+def build_watchlist(candidates: list[dict], snapshot: dict) -> str:
+    if not candidates:
+        return ""
+    cards = []
+    for c in candidates:
+        t = snapshot["tickers"].get(c["ticker"], {})
+        price = t.get("close")
+        wk = t.get("1w")
+        ytd = t.get("ytd")
+        low52 = t.get("low52")
+        high52 = t.get("high52")
+        ccy = t.get("currency") or ""
+
+        price_str = f"{price:.2f} {ccy}".strip() if price is not None else "—"
+
+        range_html = ""
+        if price is not None and low52 is not None and high52 is not None and high52 > low52:
+            pos = max(0.0, min(1.0, (price - low52) / (high52 - low52)))
+            range_html = (
+                '<div class="range-wrap">'
+                '<div class="range-track">'
+                f'<div class="range-dot" style="left:{pos*100:.1f}%"></div>'
+                '</div>'
+                '<div class="range-labels">'
+                f'<span>{low52:.2f}</span><span class="muted">52w range</span><span>{high52:.2f}</span>'
+                '</div></div>'
+            )
+
+        ucits_badge = ""
+        if c["ucits"].lower() == "yes":
+            ucits_badge = ' <span class="badge badge-ucits">UCITS</span>'
+        ter = c["ter"] or "—"
+
+        cards.append(
+            '<div class="watch-card">'
+            '<div class="watch-head">'
+            f'<div><div class="watch-ticker">{esc(c["ticker"])}{ucits_badge}</div>'
+            f'<div class="muted small">{esc(c["name"])}</div></div>'
+            f'<div class="watch-price">{price_str}</div>'
+            '</div>'
+            '<div class="watch-stats">'
+            f'<span>1w <span class="{pct_class(wk)}">{fmt_pct(wk) if wk is not None else "—"}</span></span>'
+            f'<span>YTD <span class="{pct_class(ytd)}">{fmt_pct(ytd) if ytd is not None else "—"}</span></span>'
+            f'<span>TER {esc(ter)}</span>'
+            '</div>'
+            f'{range_html}'
+            f'<div class="watch-notes muted small">{esc(c["notes"])}</div>'
+            '</div>'
+        )
+    return (
+        '<section class="card">'
+        '<div class="section-label">Watchlist candidates</div>'
+        f'<div class="watch-grid">{"".join(cards)}</div>'
+        '</section>'
+    )
+
+
+def build_timeline(trade_log: list[dict], n: int = TIMELINE_WEEKS) -> str:
+    recent = list(trade_log[:n])
+    recent.reverse()  # oldest -> newest
+    pad = n - len(recent)
+    dots = ['<div class="tl-dot tl-empty" title="no data"></div>'] * pad
+    for e in recent:
+        if e["buys"]:
+            cls, label = "tl-buy", "BUY"
+        elif e["sells"]:
+            cls, label = "tl-sell", "SELL"
+        else:
+            cls, label = "tl-hold", "HOLD"
+        tip = f'{e["date"]}: {label}'
+        if e["buys"]:
+            tip += " — " + "; ".join(e["buys"])
+        elif e["sells"]:
+            tip += " — " + "; ".join(e["sells"])
+        dots.append(f'<div class="tl-dot {cls}" title="{esc(tip)}"></div>')
+    return (
+        '<section class="card">'
+        f'<div class="section-label">Decision timeline · last {n} weeks</div>'
+        f'<div class="timeline">{"".join(dots)}</div>'
+        '<div class="timeline-legend">'
+        '<span><span class="tl-dot tl-buy"></span>BUY</span>'
+        '<span><span class="tl-dot tl-sell"></span>SELL</span>'
+        '<span><span class="tl-dot tl-hold"></span>HOLD</span>'
+        '<span><span class="tl-dot tl-empty"></span>no data</span>'
+        '</div>'
+        '</section>'
+    )
+
+
+def build_flags(portfolio: dict, snapshot: dict, trade_log: list[dict]) -> str:
+    flags: list[tuple[str, str]] = []
+
+    fred_errors = [f for f in snapshot["fred"] if f["error"]]
+    if fred_errors:
+        names = ", ".join(f["series"] for f in fred_errors)
+        flags.append(("warn", f"FRED fetch errors: {names}"))
+
+    if snapshot.get("stale") and snapshot.get("generated_at"):
+        days = (datetime.now() - snapshot["generated_at"]).days
+        flags.append(("warn", f"Market snapshot is {days} days old"))
+
+    snap_tickers = set(snapshot["tickers"].keys())
+    for h in portfolio["holdings"]:
+        if h["ticker"] not in snap_tickers:
+            flags.append(("error", f"No snapshot price for held position {h['ticker']}"))
+
+    if snapshot["missing"]:
+        flags.append(("warn", f"Snapshot fetch skipped: {', '.join(snapshot['missing'])}"))
+
+    for h in portfolio["holdings"]:
+        t = snapshot["tickers"].get(h["ticker"], {})
+        low, high = t.get("low52"), t.get("high52")
+        if low is not None and high is not None:
+            if h["avg_cost"] < low:
+                flags.append(("info",
+                    f"{h['ticker']}: avg cost {h['avg_cost']:.2f} below 52w low {low:.2f} — in profit vs range"))
+            elif h["avg_cost"] > high:
+                flags.append(("info",
+                    f"{h['ticker']}: avg cost {h['avg_cost']:.2f} above 52w high {high:.2f} — underwater vs range"))
+
+    cash = portfolio.get("cash")
+    sparplan = portfolio.get("sparplan") or 0.0
+    threshold = max(MIN_CASH_RESERVE_EUR, sparplan)
+    if cash is not None and cash < threshold:
+        flags.append(("warn",
+            f"Low cash: €{cash:.2f} below max(reserve €{MIN_CASH_RESERVE_EUR:.0f}, Sparplan €{sparplan:.0f})"))
+
+    for h in portfolio["holdings"]:
+        if h["status"] != "ring-fenced":
+            continue
+        wk = snapshot["tickers"].get(h["ticker"], {}).get("1w")
+        if wk is not None and abs(wk) > RING_FENCED_MOVE_PCT:
+            flags.append(("info", f"{h['ticker']} (ring-fenced) moved {wk:+.1f}% this week"))
+
+    if not flags:
+        body = '<p class="muted">No open issues this week.</p>'
+    else:
+        items = "".join(f'<li class="flag flag-{k}">{esc(m)}</li>' for k, m in flags)
+        body = f'<ul class="flag-list">{items}</ul>'
+
+    return (
+        '<section class="card">'
+        '<div class="section-label">Flags &amp; open issues</div>'
+        f'{body}'
+        '</section>'
+    )
+
+
+def build_prose(latest_html: str) -> str:
+    return (
+        '<section class="card">'
+        '<details>'
+        '<summary class="section-label clickable">Full prose report ▾</summary>'
+        f'<div class="prose">{latest_html}</div>'
+        '</details>'
+        '</section>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# CSS + shell
+# ---------------------------------------------------------------------------
+
+CSS = """
+:root {
   --bg: #fafafa;
   --card: #ffffff;
   --fg: #1a1a1a;
@@ -56,128 +745,277 @@ TEMPLATE = """\
   --accent: #0055aa;
   --green: #1a7a2e;
   --red: #b91c1c;
+  --amber: #b45309;
   --code-bg: #f3f3f3;
   --shadow: 0 1px 3px rgba(0,0,0,0.08);
-}}
-@media (prefers-color-scheme: dark) {{
-  :root {{
-    --bg: #161616;
-    --card: #1e1e1e;
-    --fg: #e0e0e0;
-    --muted: #999;
-    --border: #333;
+  --buy-bg: #d1fae5; --buy-fg: #065f46;
+  --sell-bg: #fee2e2; --sell-fg: #991b1b;
+  --hold-bg: #f3f4f6; --hold-fg: #374151;
+  --kpi-bg: #f8fafc;
+  --bar-empty: #e5e7eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --card: #1a1d23;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #2a2e36;
     --accent: #5b9fd6;
     --green: #4aba5c;
     --red: #e5534b;
-    --code-bg: #252525;
-    --shadow: 0 1px 3px rgba(0,0,0,0.3);
-  }}
-}}
-*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
+    --amber: #f59e0b;
+    --code-bg: #12141a;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4);
+    --buy-bg: #064e3b; --buy-fg: #6ee7b7;
+    --sell-bg: #7f1d1d; --sell-fg: #fca5a5;
+    --hold-bg: #1f2937; --hold-fg: #d1d5db;
+    --kpi-bg: #141820;
+    --bar-empty: #2a2e36;
+  }
+}
+* , *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.6;
-  padding: 1.5rem;
-}}
-.container {{ max-width: 820px; margin: 0 auto; }}
-.card {{
+  line-height: 1.5;
+  padding: 1.25rem 1rem 3rem;
+}
+.container { max-width: 1080px; margin: 0 auto; }
+.card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.5rem 2rem;
-  margin-bottom: 1.5rem;
-  box-shadow: var(--shadow);
-}}
-h1 {{
-  font-size: 1.5rem;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
   margin-bottom: 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--border);
-}}
-h2 {{
-  font-size: 1.2rem;
-  color: var(--accent);
-  margin-top: 1.6rem;
-  margin-bottom: 0.5rem;
-}}
-h3 {{
-  font-size: 1.05rem;
-  margin-top: 1.2rem;
-  margin-bottom: 0.3rem;
-}}
-p {{ margin-bottom: 0.7rem; }}
-ul, ol {{ margin: 0.3rem 0 0.7rem 1.4rem; }}
-li {{ margin-bottom: 0.2rem; }}
-strong {{ font-weight: 600; }}
-table {{
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.7rem 0;
-  font-size: 0.85rem;
-  overflow-x: auto;
-  display: block;
-}}
-th, td {{
-  text-align: left;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-}}
-th {{ background: var(--code-bg); font-weight: 600; }}
-code {{
-  background: var(--code-bg);
-  padding: 0.1rem 0.25rem;
-  border-radius: 3px;
-  font-size: 0.88em;
-}}
-pre {{
-  background: var(--code-bg);
-  padding: 0.8rem 1rem;
-  border-radius: 4px;
-  overflow-x: auto;
-  margin: 0.5rem 0;
-}}
-pre code {{ background: none; padding: 0; }}
-blockquote {{
-  border-left: 3px solid var(--accent);
-  padding-left: 1rem;
-  color: var(--muted);
-  margin: 0.5rem 0;
-}}
-.section-label {{
-  font-size: 0.8rem;
+  box-shadow: var(--shadow);
+}
+.section-label {
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
   color: var(--muted);
-  margin-bottom: 0.3rem;
-}}
-footer {{
-  margin-top: 2rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 0.82rem;
-  text-align: center;
-}}
-footer a {{ color: var(--accent); }}
-</style>
+  margin-bottom: 0.6rem;
+}
+.muted { color: var(--muted); }
+.small { font-size: 0.82rem; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.up { color: var(--green); }
+.down { color: var(--red); }
+
+/* Banner */
+.banner {
+  border-radius: 12px;
+  padding: 1.5rem 1.75rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.banner-buy  { background: var(--buy-bg);  color: var(--buy-fg);  border-color: var(--buy-fg); }
+.banner-sell { background: var(--sell-bg); color: var(--sell-fg); border-color: var(--sell-fg); }
+.banner-hold { background: var(--hold-bg); color: var(--hold-fg); }
+.banner-label {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em;
+  opacity: 0.8; margin-bottom: 0.35rem;
+}
+.banner-value {
+  font-size: 2.4rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;
+}
+.banner-sub { margin-top: 0.4rem; font-size: 0.95rem; opacity: 0.9; }
+
+/* Regime line */
+.regime {
+  display: inline-block;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+.regime-green { background: var(--buy-bg);  color: var(--buy-fg); }
+.regime-red   { background: var(--sell-bg); color: var(--sell-fg); }
+.regime-amber { background: #fef3c7; color: var(--amber); }
+@media (prefers-color-scheme: dark) { .regime-amber { background: #451a03; color: #fbbf24; } }
+.regime-grey  { background: var(--hold-bg); color: var(--hold-fg); }
+
+/* KPI grid */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@media (max-width: 640px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+.kpi {
+  background: var(--kpi-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem 0.9rem;
+}
+.kpi-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.kpi-value { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; margin: 0.2rem 0; }
+.kpi-delta { font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+
+/* Allocation donut */
+.alloc-wrap { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }
+.donut { width: 180px; height: 180px; flex-shrink: 0; }
+.donut-total { font-size: 16px; font-weight: 600; fill: var(--fg); font-variant-numeric: tabular-nums; }
+.donut-sub { font-size: 10px; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.legend { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 0.35rem; }
+.legend-row {
+  display: grid; grid-template-columns: 14px 1fr auto auto; gap: 0.6rem; align-items: center;
+  font-size: 0.88rem; font-variant-numeric: tabular-nums;
+}
+.swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.legend-label { font-weight: 500; }
+.legend-pct { color: var(--muted); }
+.legend-val { font-weight: 500; }
+
+/* Holdings table */
+.table-wrap { overflow-x: auto; }
+.holdings { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.holdings th, .holdings td {
+  padding: 0.55rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border);
+}
+.holdings th {
+  font-weight: 600; color: var(--muted); font-size: 0.76rem;
+  text-transform: uppercase; letter-spacing: 0.05em; border-bottom-width: 2px;
+}
+.holdings tbody tr:last-child td { border-bottom: none; }
+.holdings td.num, .holdings th.num { text-align: right; }
+
+.badge {
+  display: inline-block; padding: 0.08rem 0.45rem; border-radius: 4px;
+  font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--hold-bg); color: var(--hold-fg); vertical-align: middle;
+}
+.badge-ring { background: #fef3c7; color: var(--amber); }
+@media (prefers-color-scheme: dark) { .badge-ring { background: #451a03; color: #fbbf24; } }
+.badge-ucits { background: var(--buy-bg); color: var(--buy-fg); }
+
+/* P&L bar */
+.pnl-cell { min-width: 170px; }
+.pnl-bar {
+  position: relative; height: 8px; background: var(--bar-empty);
+  border-radius: 4px; overflow: hidden;
+}
+.pnl-mid {
+  position: absolute; left: 50%; top: -2px; width: 1px; height: 12px;
+  background: var(--muted); opacity: 0.5;
+}
+.pnl-fill { position: absolute; top: 0; bottom: 0; }
+.pnl-fill.up   { background: var(--green); }
+.pnl-fill.down { background: var(--red); }
+.pnl-right { left: 50%; }
+.pnl-left  { right: 50%; }
+.pnl-bar-empty { background: var(--bar-empty); }
+.pnl-text { font-size: 0.82rem; margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+
+/* Watchlist */
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.85rem;
+}
+.watch-card {
+  border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem 1rem;
+  background: var(--kpi-bg); display: flex; flex-direction: column; gap: 0.55rem;
+}
+.watch-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
+.watch-ticker { font-weight: 600; font-size: 1rem; }
+.watch-price { font-variant-numeric: tabular-nums; font-weight: 600; }
+.watch-stats { display: flex; gap: 0.85rem; font-size: 0.82rem; flex-wrap: wrap; }
+.watch-stats > span { color: var(--muted); }
+.watch-stats > span .up, .watch-stats > span .down { font-weight: 600; }
+.watch-notes { line-height: 1.4; }
+
+.range-wrap { margin-top: 0.15rem; }
+.range-track {
+  position: relative; height: 6px; background: var(--bar-empty); border-radius: 3px;
+}
+.range-dot {
+  position: absolute; top: -3px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); transform: translateX(-50%); border: 2px solid var(--card);
+}
+.range-labels {
+  display: flex; justify-content: space-between; font-size: 0.7rem;
+  color: var(--muted); margin-top: 0.2rem; font-variant-numeric: tabular-nums;
+}
+
+/* Timeline */
+.timeline { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
+.tl-dot {
+  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
+  border: 1px solid var(--border); cursor: help;
+}
+.tl-buy   { background: var(--green); border-color: var(--green); }
+.tl-sell  { background: var(--red); border-color: var(--red); }
+.tl-hold  { background: var(--muted); border-color: var(--muted); opacity: 0.5; }
+.tl-empty { background: transparent; }
+.timeline-legend {
+  display: flex; gap: 1rem; font-size: 0.78rem; color: var(--muted);
+}
+.timeline-legend > span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.timeline-legend .tl-dot { width: 10px; height: 10px; }
+
+/* Flags */
+.flag-list { list-style: none; display: flex; flex-direction: column; gap: 0.4rem; }
+.flag {
+  padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.88rem;
+  border-left: 3px solid var(--border);
+}
+.flag-error { background: var(--sell-bg); color: var(--sell-fg); border-left-color: var(--red); }
+.flag-warn  { background: #fef3c7; color: var(--amber); border-left-color: var(--amber); }
+@media (prefers-color-scheme: dark) {
+  .flag-warn { background: #451a03; color: #fbbf24; }
+}
+.flag-info  { background: var(--kpi-bg); border-left-color: var(--accent); }
+
+/* Prose <details> */
+details { cursor: default; }
+summary.clickable { cursor: pointer; user-select: none; }
+summary.clickable:hover { color: var(--accent); }
+.prose { margin-top: 1rem; }
+.prose h1 {
+  font-size: 1.4rem; margin-bottom: 0.8rem; padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.prose h2 { font-size: 1.1rem; color: var(--accent); margin-top: 1.2rem; margin-bottom: 0.4rem; }
+.prose h3 { font-size: 1rem; margin-top: 1rem; margin-bottom: 0.3rem; }
+.prose p { margin-bottom: 0.6rem; }
+.prose ul, .prose ol { margin: 0.3rem 0 0.7rem 1.4rem; }
+.prose li { margin-bottom: 0.2rem; }
+.prose table { border-collapse: collapse; font-size: 0.85rem; margin: 0.6rem 0; }
+.prose th, .prose td { padding: 0.35rem 0.55rem; border: 1px solid var(--border); }
+.prose th { background: var(--code-bg); }
+.prose code { background: var(--code-bg); padding: 0.1rem 0.25rem; border-radius: 3px; font-size: 0.88em; }
+.prose blockquote {
+  border-left: 3px solid var(--accent); padding-left: 1rem;
+  color: var(--muted); margin: 0.5rem 0;
+}
+
+footer {
+  margin-top: 1.5rem; padding-top: 0.8rem; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 0.78rem; text-align: center;
+}
+footer a { color: var(--accent); }
+"""
+
+
+HEAD = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Trading Research</title>
+<style>__CSS__</style>
 </head>
 <body>
 <div class="container">
+"""
 
-  <div class="card">
-    <div class="section-label">This week</div>
-    {latest_html}
-  </div>
-
-  {log_card}
-
-  <footer>
-    Generated by <a href="https://github.com/{repo}">trading-agent</a>
-  </footer>
-
+FOOT = """
+<footer>Generated by <a href="https://github.com/__REPO__">trading-agent</a></footer>
 </div>
 </body>
 </html>
@@ -188,45 +1026,39 @@ footer a {{ color: var(--accent); }}
 # Main
 # ---------------------------------------------------------------------------
 
-def render_md(text: str) -> str:
-    """Convert markdown to HTML with table and fenced-code support."""
-    return markdown.markdown(text, extensions=["tables", "fenced_code"])
+def read_or_empty(p: Path) -> str:
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def main() -> None:
-    # Latest report
-    latest_path = DOCS / "latest.md"
-    if not latest_path.exists():
+    latest_txt = read_or_empty(DOCS / "latest.md")
+    if not latest_txt:
         print("docs/latest.md not found — skipping render")
         return
-    latest_html = render_md(latest_path.read_text(encoding="utf-8"))
 
-    # Trade log (recent entries)
-    log_path = MEMORY / "trade_log.md"
-    log_card = ""
-    if log_path.exists():
-        log_text = log_path.read_text(encoding="utf-8")
-        recent = extract_recent_sections(log_text, MAX_LOG_SECTIONS)
-        if recent:
-            log_html = render_md(recent)
-            log_card = (
-                '<div class="card">\n'
-                '    <div class="section-label">Recent picks</div>\n'
-                f"    {log_html}\n"
-                "  </div>"
-            )
+    portfolio = parse_portfolio(read_or_empty(MEMORY / "portfolio.md"))
+    candidates = parse_watchlist(read_or_empty(MEMORY / "watchlist.md"))
+    snapshot = parse_market_snapshot(read_or_empty(MEMORY / "market_snapshot.md"))
+    trade_log = parse_trade_log(read_or_empty(MEMORY / "trade_log.md"))
+    latest = parse_latest(latest_txt)
 
-    # Repo link from GitHub Actions env, fallback for local runs
-    repo = os.environ.get("GITHUB_REPOSITORY", "trading-agent")
+    eurusd = snapshot["tickers"].get("EURUSD=X", {}).get("close")
 
-    html = TEMPLATE.format(
-        latest_html=latest_html,
-        log_card=log_card,
-        repo=repo,
-    )
+    parts = [
+        HEAD.replace("__CSS__", CSS),
+        build_banner(trade_log),
+        build_macro(latest, snapshot),
+        build_allocation(portfolio, snapshot, eurusd),
+        build_holdings(portfolio, snapshot, eurusd),
+        build_watchlist(candidates, snapshot),
+        build_timeline(trade_log),
+        build_flags(portfolio, snapshot, trade_log),
+        build_prose(latest["full_html"]),
+        FOOT.replace("__REPO__", os.environ.get("GITHUB_REPOSITORY", "trading-agent")),
+    ]
 
     out = DOCS / "index.html"
-    out.write_text(html, encoding="utf-8")
+    out.write_text("\n".join(parts), encoding="utf-8")
     print(f"Rendered {out}")
 
 

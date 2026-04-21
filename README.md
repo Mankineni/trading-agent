@@ -21,6 +21,36 @@ Every Friday at 19:00 UTC (20:00 CET / 21:00 CEST):
 You maintain two files (`portfolio.md` and `watchlist.md`). The agent
 maintains the rest. Zero picks is a valid and common output.
 
+## Dashboard layout
+
+`docs/index.html` is a single self-contained page (no external JS/CSS,
+dark-mode aware) split into eight scannable sections:
+
+1. **Decision banner** — large colour-coded verdict for the week (BUY / SELL /
+   HOLD) pulled from the latest `trade_log.md` entry.
+2. **Macro backdrop** — regime pill (risk-on / neutral / caution / risk-off)
+   plus four KPI tiles: VIX, US 10Y, EUR/USD, Gold. Each tile shows the
+   latest value and the 1-week change.
+3. **Allocation** — hand-rolled SVG donut of current EUR value per position,
+   with cash as its own slice and a legend listing % and EUR per position.
+   USD holdings are converted at the snapshot's EUR/USD rate.
+4. **Holdings table** — position, quantity, avg cost, current price, EUR
+   value, a centred P&L bar (green right / red left, globally scaled), the
+   week's move, and a `ring-fenced` badge where applicable.
+5. **Watchlist candidates** — one card per candidate with price, 1w, YTD,
+   UCITS badge, TER, and a dot on the 52-week range.
+6. **Decision timeline** — the last 12 weeks as horizontal dots, coloured
+   green (BUY) / red (SELL) / grey (HOLD), with the date and picks on hover.
+7. **Flags & open issues** — auto-generated from the data: FRED fetch
+   errors, stale snapshot, held positions missing from the snapshot,
+   cost-basis outside 52w range, low cash, and >10% weekly moves on
+   ring-fenced positions.
+8. **Full prose report** — the week's `latest.md` rendered as HTML inside a
+   collapsed `<details>` block for when you want the agent's full reasoning.
+
+Graceful placeholders kick in when data is missing (FRED errors, stale or
+empty snapshot, tickers yfinance couldn't fetch) — the page still renders.
+
 ## Setup (8 steps)
 
 1. **Create a private GitHub repo** and push this code to `main`.
