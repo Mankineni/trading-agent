@@ -222,10 +222,13 @@ def compute_holdings(transactions: list[dict]) -> dict[str, dict]:
 
 
 def compute_cash(transactions: list[dict]) -> float:
-    """Cash delta for each row is amount - fee - tax; sum across all executed rows."""
+    """Cash delta per row is amount - fee. The tax column is informational
+    (already reflected in amount — it's the gross tax figure for reporting,
+    e.g. the yearly KKT-Abschluss row has tax=185.98 for reporting but the
+    account change was just amount=-0.46). Fees are charged on top of amount."""
     total = 0.0
     for t in transactions:
-        total += t["amount"] - t["fee"] - t["tax"]
+        total += t["amount"] - t["fee"]
     return total
 
 

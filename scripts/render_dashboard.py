@@ -716,6 +716,26 @@ def build_flags(
     if snapshot["missing"]:
         flags.append(("warn", f"Snapshot fetch skipped: {', '.join(snapshot['missing'])}"))
 
+    # Price sanity: EUR value vs EUR cost basis should sit in a plausible band.
+    # Anything under 0.2× or over 5× the cost basis almost certainly means
+    # yfinance returned bad data (split-adjusted, wrong ticker, stale).
+    eurusd_local = snapshot["tickers"].get("EURUSD=X", {}).get("close")
+    for h in holdings:
+        t = snapshot["tickers"].get(h["ticker"], {})
+        price = t.get("close")
+        if price is None or h["cost_eur"] <= 0:
+            continue
+        listing = t.get("currency") or "EUR"
+        val_eur = eur_value(h["qty"], price, listing, eurusd_local)
+        if val_eur is None:
+            continue
+        ratio = val_eur / h["cost_eur"]
+        if ratio < 0.2 or ratio > 5.0:
+            flags.append(("error",
+                f"{h['ticker']}: current value €{val_eur:,.2f} is {ratio:.2f}× "
+                f"cost basis €{h['cost_eur']:,.2f} — likely bad yfinance data, "
+                f"P&L is unreliable"))
+
     threshold = max(MIN_CASH_RESERVE_EUR, sparplan)
     if cash is not None and cash < threshold:
         flags.append(("warn",
