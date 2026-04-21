@@ -15,20 +15,25 @@
 - **Risk appetite:** I can probably stomach a 20–30% drawdown without panic-selling, but I haven't been tested yet. Respect this — don't push me into aggressive positions until I've seen a real drawdown.
 - **Phase:** Learning phase. First 6 months are about building intuition, not maximising return.
 
-## Cash balance (EUR)
+## Cash & Sparplan
 
-- Free cash available for new investments: **€428.72**
 - Monthly Sparplan amount: **€150.00**
 - Sparplan target: **iShares Core MSCI World (Acc)**
 - Total new capital I'm comfortable deploying in the next 3 months: **€500**
 
+*Current cash balance is computed from `memory/transactions.csv` by `scripts/compute_holdings.py` and lives in `memory/holdings.md`. No longer maintained by hand.*
+
 ## Current holdings
 
-| Ticker  | ISIN         | Name                            | Quantity  | Avg. cost | Currency | Purchased  | Status       |
-|---------|--------------|---------------------------------|----------:|----------:|:--------:|------------|--------------|
-| BBAI    | US08975B1098 | BigBear.ai Holdings             | 42        |      3.34 | USD      | 2025-03-06 | ring-fenced  |
-| IWDA.AS | IE00B4L5Y983 | iShares Core MSCI World Acc     |  2.695764 |    116.25 | EUR      | 2025-03-06 | active       |
-| SPYI.DE | IE00B6R52259 | SPDR MSCI ACWI IMI Acc          | 3         |     98.01 | EUR      | 2025-03-06 | active       |
+*Holdings are computed from `memory/transactions.csv` by `scripts/compute_holdings.py`. See `memory/holdings.md` for qty and EUR cost basis. The only thing the agent can configure from this file is the `Position overrides` section below.*
+
+## Position overrides
+
+Per-ISIN status flags that override the default `active`. The agent respects these when reasoning about positions.
+
+| ISIN | Status | Notes |
+|------|--------|-------|
+| US08975B1098 | ring-fenced | BBAI — see "Important context" block below |
 
 ### Important context for the agent about BBAI
 
