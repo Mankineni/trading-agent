@@ -20,3 +20,7 @@ END FORMAT EXAMPLE -->
 ## 2026-04-21
 
 **No picks this week.**
+
+## 2026-04-24
+
+**No picks this week.**
