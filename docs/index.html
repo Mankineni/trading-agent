@@ -140,6 +140,53 @@ body {
 .jump-nav a:hover { border-color: var(--accent); color: var(--accent); }
 .dashboard-note { margin: 0 0 1rem; }
 
+/* Best stock candidate */
+.best-stock { border-left: 4px solid var(--accent); }
+.best-stock-buy { border-left-color: var(--green); }
+.best-stock-hold { border-left-color: var(--amber); }
+.best-stock-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 0.85rem;
+}
+.best-stock-ticker { font-size: 1.7rem; font-weight: 700; line-height: 1.1; }
+.best-stock-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  background: var(--kpi-bg);
+}
+.best-stock-buy .best-stock-status { background: var(--buy-bg); color: var(--buy-fg); border-color: var(--buy-fg); }
+.best-stock-hold .best-stock-status { background: #fef3c7; color: var(--amber); border-color: var(--amber); }
+@media (prefers-color-scheme: dark) {
+  .best-stock-hold .best-stock-status { background: #451a03; color: #fbbf24; }
+}
+.best-stock-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+@media (max-width: 760px) { .best-stock-grid { grid-template-columns: repeat(2, 1fr); } }
+.best-stock-grid span {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  background: var(--kpi-bg);
+}
+.best-stock-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.best-stock-grid strong { display: block; margin-top: 0.12rem; font-variant-numeric: tabular-nums; }
+.best-stock-note { margin-top: 0.75rem; }
+
 /* Regime line */
 .regime {
   display: inline-block;
@@ -329,7 +376,8 @@ footer a { color: var(--accent); }
 <div class="container">
 
 <section class="banner banner-hold"><div class="banner-label">Decision · 2026-04-24</div><div class="banner-value">HOLD</div><div class="banner-sub">No picks this week.</div></section>
-<section class="summary-grid" aria-label="At a glance"><a class="summary-card" href="#portfolio"><span>This week</span><strong>HOLD</strong><em>Latest logged action</em></a><a class="summary-card" href="#portfolio"><span>Account size</span><strong>€885.70</strong><em>Priced holdings plus cash</em></a><a class="summary-card" href="#portfolio"><span>Free cash</span><strong>€429.08</strong><em>Cash available before reserve</em></a><a class="summary-card" href="#opportunities"><span>Max stock price</span><strong>€221.42</strong><em>Single share cap: 25% of account</em></a></section><nav class="jump-nav" aria-label="Dashboard sections"><a href="#portfolio">Portfolio</a><a href="#opportunities">Top scores</a><a href="#watchlist">Watchlist</a><a href="#flags">Flags</a><a href="#report">Report</a></nav><p class="muted small dashboard-note">Active priced value: €314.25. Ring-fenced value: €142.37. Single stocks above €221.42 per share are hidden from top ideas for this account size.</p>
+<section class="summary-grid" aria-label="At a glance"><a class="summary-card" href="#portfolio"><span>This week</span><strong>HOLD</strong><em>Latest logged action</em></a><a class="summary-card" href="#portfolio"><span>Account size</span><strong>€885.70</strong><em>Priced holdings plus cash</em></a><a class="summary-card" href="#portfolio"><span>Free cash</span><strong>€429.08</strong><em>Cash available before reserve</em></a><a class="summary-card" href="#opportunities"><span>Max stock price</span><strong>€221.42</strong><em>Single share cap: 25% of account</em></a></section><nav class="jump-nav" aria-label="Dashboard sections"><a href="#portfolio">Portfolio</a><a href="#best-stock">Best stock</a><a href="#opportunities">Top scores</a><a href="#watchlist">Watchlist</a><a href="#flags">Flags</a><a href="#report">Report</a></nav><p class="muted small dashboard-note">Active priced value: €314.25. Ring-fenced value: €142.37. Single stocks above €221.42 per share are hidden from top ideas for this account size.</p>
+<section class="card best-stock" id="best-stock"><div class="section-label">Best stock candidate</div><p class="muted">No affordable single-stock candidate in the current opportunity scores.</p></section>
 <section class="card" id="macro"><div class="section-label">Macro backdrop</div><div class="regime regime-amber">Regime: <strong>CAUTION</strong><span class="muted small"> · snapshot 2026-04-21 16:03</span></div><div class="kpi-grid"><div class="kpi"><div class="kpi-label">VIX</div><div class="kpi-value">19.13</div><div class="kpi-delta up">+4.2% 1w</div></div><div class="kpi"><div class="kpi-label">US 10Y</div><div class="kpi-value">4.27</div><div class="kpi-delta up">+0.4% 1w</div></div><div class="kpi"><div class="kpi-label">EUR/USD</div><div class="kpi-value">1.1800</div><div class="kpi-delta ">+0.0% 1w</div></div><div class="kpi"><div class="kpi-label">Gold (USD)</div><div class="kpi-value">4,812</div><div class="kpi-delta down">-0.3% 1w</div></div></div></section>
 <section class="card" id="portfolio"><div class="section-label">Allocation</div><div class="alloc-wrap"><svg viewBox="0 0 180 180" class="donut" role="img" aria-label="Portfolio allocation"><circle r="70" cx="90" cy="90" fill="transparent" stroke="var(--border)" stroke-width="28"/><circle r="70" cx="90" cy="90" fill="transparent" stroke="#4c9aff" stroke-width="28" stroke-dasharray="156.05 283.77" stroke-dashoffset="-0.00" transform="rotate(-90 90 90)"><title>IWDA.AS: €314.25 (35.5%)</title></circle><circle r="70" cx="90" cy="90" fill="transparent" stroke="#5bd17a" stroke-width="28" stroke-dasharray="70.70 369.12" stroke-dashoffset="-156.05" transform="rotate(-90 90 90)"><title>BBAI: €142.37 (16.1%)</title></circle><circle r="70" cx="90" cy="90" fill="transparent" stroke="#f5a524" stroke-width="28" stroke-dasharray="213.07 226.75" stroke-dashoffset="-226.75" transform="rotate(-90 90 90)"><title>Cash: €429.08 (48.4%)</title></circle><text x="90" y="88" text-anchor="middle" class="donut-total">€885.70</text><text x="90" y="104" text-anchor="middle" class="donut-sub">total</text></svg><div class="legend"><div class="legend-row"><span class="swatch" style="background:#4c9aff"></span><span class="legend-label">IWDA.AS</span><span class="legend-pct">35.5%</span><span class="legend-val">€314.25</span></div><div class="legend-row"><span class="swatch" style="background:#5bd17a"></span><span class="legend-label">BBAI</span><span class="legend-pct">16.1%</span><span class="legend-val">€142.37</span></div><div class="legend-row"><span class="swatch" style="background:#f5a524"></span><span class="legend-label">Cash</span><span class="legend-pct">48.4%</span><span class="legend-val">€429.08</span></div></div></div><p class="muted small">No price for: IUSQ.DE — excluded from total.</p></section>
 <section class="card" id="holdings"><div class="section-label">Holdings</div><div class="table-wrap"><table class="holdings"><thead><tr><th>Position</th><th class="num">Qty</th><th class="num">Avg cost (EUR)</th><th class="num">Current</th><th class="num">Value (EUR)</th><th>P&amp;L</th><th class="num">1w</th></tr></thead><tbody><tr><td><strong>IWDA.AS</strong><div class="muted small">iShares Core MSCI World (Acc)</div></td><td class="num">2.695764</td><td class="num">€111.38</td><td class="num">116.57 EUR</td><td class="num">€314.25</td><td class="pnl-cell"><div class="pnl-bar"><div class="pnl-mid"></div><div class="pnl-fill pnl-right up" style="width:17.2%"></div></div><div class="pnl-text"><span class="up">+4.7% (€14.00)</span></div></td><td class="num up">+2.1%</td></tr><tr><td><strong>IUSQ.DE</strong><div class="muted small">iShares MSCI ACWI (Acc)</div></td><td class="num">3</td><td class="num">€93.89</td><td class="num">—</td><td class="num">—</td><td class="pnl-cell"><div class="pnl-bar pnl-bar-empty"></div><div class="pnl-text"><span class="muted">—</span></div></td><td class="num ">—</td></tr><tr><td><strong>BBAI</strong> <span class="badge badge-ring">ring-fenced</span><div class="muted small">BigBear.ai Holdings</div></td><td class="num">42</td><td class="num">€3.92</td><td class="num">4.00 USD</td><td class="num">€142.37</td><td class="pnl-cell"><div class="pnl-bar"><div class="pnl-mid"></div><div class="pnl-fill pnl-left down" style="width:50.0%"></div></div><div class="pnl-text"><span class="down">-13.6% (€-22.36)</span></div></td><td class="num up">+13.6%</td></tr></tbody></table></div></section>

@@ -375,6 +375,25 @@ def is_affordable_single_share(ticker: str, price: float | None, currency: str, 
     return price_eur <= portfolio_total * MAX_SINGLE_SHARE_FRACTION
 
 
+def eligible_stock_opportunities(snapshot: dict, portfolio_total: float | None,
+                                 eurusd: float | None) -> list[dict]:
+    eligible = []
+    for o in snapshot.get("opportunities") or []:
+        ticker = o["ticker"]
+        if not is_single_stock_ticker(ticker):
+            continue
+        t = snapshot["tickers"].get(ticker, {})
+        if is_affordable_single_share(
+            ticker=ticker,
+            price=t.get("close"),
+            currency=t.get("currency") or "EUR",
+            eurusd=eurusd,
+            portfolio_total=portfolio_total,
+        ):
+            eligible.append(o)
+    return eligible
+
+
 def fmt_eur(v: float | None) -> str:
     return "—" if v is None else f"€{v:,.2f}"
 
@@ -482,6 +501,7 @@ def build_decision_summary(holdings: list[dict], cash: float, snapshot: dict, eu
         '</section>'
         '<nav class="jump-nav" aria-label="Dashboard sections">'
         '<a href="#portfolio">Portfolio</a>'
+        '<a href="#best-stock">Best stock</a>'
         '<a href="#opportunities">Top scores</a>'
         '<a href="#watchlist">Watchlist</a>'
         '<a href="#flags">Flags</a>'
@@ -489,6 +509,57 @@ def build_decision_summary(holdings: list[dict], cash: float, snapshot: dict, eu
         '</nav>'
         f'<p class="muted small dashboard-note">Active priced value: {fmt_eur(active_value)}. '
         f'Ring-fenced value: {fmt_eur(ring_value)}. Single stocks above {fmt_eur(max_share)} per share are hidden from top ideas for this account size.</p>'
+    )
+
+
+def build_best_stock_candidate(snapshot: dict, portfolio_total: float | None, eurusd: float | None,
+                               trade_log: list[dict]) -> str:
+    candidates = eligible_stock_opportunities(snapshot, portfolio_total, eurusd)
+    if not candidates:
+        return (
+            '<section class="card best-stock" id="best-stock">'
+            '<div class="section-label">Best stock candidate</div>'
+            '<p class="muted">No affordable single-stock candidate in the current opportunity scores.</p>'
+            '</section>'
+        )
+
+    pick = candidates[0]
+    ticker = pick["ticker"]
+    t = snapshot["tickers"].get(ticker, {})
+    currency = t.get("currency") or "EUR"
+    price = t.get("close")
+    price_eur = unit_price_eur(price, currency, eurusd)
+    latest = trade_log[0] if trade_log else None
+    is_buy = bool(latest and any(b.startswith(ticker) or b.startswith(f"{ticker} ") for b in latest["buys"]))
+    status_cls = "buy" if is_buy else "hold"
+    status = "Ready to buy" if is_buy else "Review only"
+    reason = (
+        "The weekly report logged this ticker as a BUY."
+        if is_buy else
+        "Highest affordable stock score, but not a logged BUY recommendation."
+    )
+    price_text = "data unavailable"
+    if price is not None:
+        price_text = f"{price:.2f} {currency}"
+        if currency == "USD" and price_eur is not None:
+            price_text += f" ({fmt_eur(price_eur)})"
+
+    return (
+        f'<section class="card best-stock best-stock-{status_cls}" id="best-stock">'
+        '<div class="section-label">Best stock candidate</div>'
+        '<div class="best-stock-main">'
+        f'<div><div class="best-stock-ticker">{esc(ticker)}</div>'
+        f'<div class="muted small">{esc(reason)}</div></div>'
+        f'<div class="best-stock-status">{esc(status)}</div>'
+        '</div>'
+        '<div class="best-stock-grid">'
+        f'<span><small>Score</small><strong>{fmt_number(pick.get("score"), 0)}</strong></span>'
+        f'<span><small>Price</small><strong>{esc(price_text)}</strong></span>'
+        f'<span><small>1m</small><strong class="{pct_class(pick.get("trend_1m"))}">{fmt_pct(pick.get("trend_1m"))}</strong></span>'
+        f'<span><small>3m</small><strong class="{pct_class(pick.get("trend_3m"))}">{fmt_pct(pick.get("trend_3m"))}</strong></span>'
+        '</div>'
+        f'<p class="muted small best-stock-note">{esc(pick.get("score_notes") or "No score notes available.")}</p>'
+        '</section>'
     )
 
 
@@ -1119,6 +1190,53 @@ body {
 .jump-nav a:hover { border-color: var(--accent); color: var(--accent); }
 .dashboard-note { margin: 0 0 1rem; }
 
+/* Best stock candidate */
+.best-stock { border-left: 4px solid var(--accent); }
+.best-stock-buy { border-left-color: var(--green); }
+.best-stock-hold { border-left-color: var(--amber); }
+.best-stock-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 0.85rem;
+}
+.best-stock-ticker { font-size: 1.7rem; font-weight: 700; line-height: 1.1; }
+.best-stock-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.28rem 0.7rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  background: var(--kpi-bg);
+}
+.best-stock-buy .best-stock-status { background: var(--buy-bg); color: var(--buy-fg); border-color: var(--buy-fg); }
+.best-stock-hold .best-stock-status { background: #fef3c7; color: var(--amber); border-color: var(--amber); }
+@media (prefers-color-scheme: dark) {
+  .best-stock-hold .best-stock-status { background: #451a03; color: #fbbf24; }
+}
+.best-stock-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+@media (max-width: 760px) { .best-stock-grid { grid-template-columns: repeat(2, 1fr); } }
+.best-stock-grid span {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  background: var(--kpi-bg);
+}
+.best-stock-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.best-stock-grid strong { display: block; margin-top: 0.12rem; font-variant-numeric: tabular-nums; }
+.best-stock-note { margin-top: 0.75rem; }
+
 /* Regime line */
 .regime {
   display: inline-block;
@@ -1357,6 +1475,7 @@ def main() -> None:
         HEAD.replace("__CSS__", CSS),
         build_banner(trade_log),
         build_decision_summary(holdings, cash or 0.0, snapshot, eurusd, trade_log),
+        build_best_stock_candidate(snapshot, portfolio_total, eurusd, trade_log),
         build_macro(latest, snapshot),
         build_allocation(holdings, cash or 0.0, snapshot, eurusd),
         build_holdings(holdings, snapshot, eurusd),
