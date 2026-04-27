@@ -1,38 +1,54 @@
-# Weekly Research — 2026-04-24
+# Weekly Research - 2026-04-27
 
 ## TL;DR
 
-VIX spiked mid-week then partially recovered; US 10Y nudged up to 4.31%; all active equity ETFs finished the week roughly flat. No new buys — IWDA.AS is Sparplan-blocked, VWCE.DE duplicates existing global equity exposure, and AGGH.DE has no price data. The SPYI.DE cost-basis anomaly (avg cost €93.89 vs current €10.58) blocks evaluation of that position for a second consecutive week and requires human resolution.
+The SPYI.DE issue was a ticker mapping error, not a transaction problem: ISIN IE00B6R52259 maps to IUSQ.DE, now priced at EUR 98.46 versus EUR 93.89 average cost. No immediate trade is forced by this fix; the portfolio now shows IWDA.AS and IUSQ.DE both modestly positive, while BBAI remains ring-fenced and negative. Tactical scores highlight MSFT, NVDA, and GOOGL as names to watch, but any tactical buy still needs sizing inside the 20% risk sleeve and a clear exit plan.
 
 ## Macro Backdrop
 
-- US 10Y: 4.31% (Δ +0.06pp from ~4.25% last week — mild upward pressure, no trend break)
-- EUR/USD: 1.1700 (Δ -0.01 from 1.18 last week — EUR softened marginally)
-- VIX: 18.68 (Δ -0.22 from ~18.9 last week; up 6.9% over the week but -3.3% on Friday — mid-week spike with partial reversal)
-- Gold (GC=F): $4,732.60 (-2.6% this week after +9.7% YTD run — short-term pullback in a still-elevated trend)
-- Brent Crude: data unavailable (FRED ERROR — second consecutive week; no price in snapshot)
-- One-line read: mixed — vol elevated but retreating, rates stable, equity ETFs flat, EUR softening slightly; no regime change
+- US 10Y proxy (^TNX): 4.31, up +1.5% over 1w.
+- EUR/USD: 1.18, up +0.1% over 1w.
+- VIX: 18.97, up +0.5% over 1w and still below the 20 caution threshold.
+- Gold (GC=F): $4,720.60, down -1.8% over 1w but up +9.4% YTD.
+- FRED values timed out in this local run, so Yahoo macro tickers are the usable macro source this week.
+- Market regime: mixed-to-risk-on for equities; core can stay invested, tactical sleeve should avoid chasing extended one-week moves.
+
+## Opportunity Screen
+
+The score is a research triage signal, not a buy instruction. It helps decide what deserves deeper work.
+
+| Ticker | Score | Signal read | Action |
+|--------|------:|-------------|--------|
+| MSFT | 89 | Strong 1m momentum, revenue growth, high margin, constructive analysts, positive headline tone | WATCH |
+| NVDA | 87 | Strong growth and margin, positive 3m trend, but already close to 52w high | WATCH |
+| GOOGL | 82 | Positive 1m/3m trend, profitable, revenue growing, neutral headline tone | WATCH |
+| IUSQ.DE | 72 | Held core ETF, price now matches the transaction scale after ticker fix | HOLD |
+| VWCE.DE | 72 | Core ETF still attractive structurally, but duplicates existing global equity exposure | SKIP |
 
 ## Actions
 
 ### HOLD positions
 
-- **IWDA.AS — iShares Core MSCI World (Acc):** HOLD — Sparplan target at €116.73 (near 52w high of €117.00); 2.695764 shares at avg cost €111.38; unrealized gain ≈+€14.47 (+4.8%); monthly auto-invest already handles capital deployment here.
-- **SPYI.DE — iShares MSCI ACWI (Acc):** HOLD — current €10.58; recorded avg cost €93.89 per share is an 89% discrepancy; no add or sell evaluated until transactions.csv is verified. See Open Questions.
-- **BBAI — BigBear.ai Holdings:** HOLD (ring-fenced) — $3.70 ≈ €3.16 at EUR/USD 1.17; 42 shares, EUR cost basis €164.73, current EUR value ≈€132.82; down ≈19% from EUR cost basis and -36.7% YTD. Agent takes no action. Human to decide when to review the ring-fence.
+- **IWDA.AS - iShares Core MSCI World (Acc):** HOLD - current EUR 116.78 versus EUR 111.38 average cost; Sparplan already handles regular buying.
+- **IUSQ.DE - iShares MSCI ACWI (Acc):** HOLD - current EUR 98.46 versus EUR 93.89 average cost; prior SPYI.DE anomaly is fixed by correcting the ticker mapping.
+- **BBAI - BigBear.ai Holdings:** HOLD (ring-fenced) - current $3.70, negative versus EUR cost basis; agent still does not buy or sell this position.
+
+## Portfolio Plan
+
+Current priced portfolio is about EUR 1,170.97 including cash. Active core ETFs are roughly EUR 610.19, BBAI is roughly EUR 131.69 and ring-fenced, and cash is EUR 429.08. The 20% tactical sleeve should be treated as a cap, not a target; with BBAI already consuming speculative risk, any new tactical buy should be small and should not be opened without a written exit plan.
 
 ## Retro on Last Week
 
-**Grade: A** — "No picks" was the correct call. IWDA.AS finished +0.0% on the week, SPYI.DE -0.1%, VWCE.DE -0.0%. Sitting on hands cost nothing, and every data-quality blocker that drove the no-pick decision is still unresolved, confirming the call was right for the right reasons.
+**Grade: B** - "No picks" was still conservative and acceptable, but the SPYI.DE issue should have been identified as a wrong ticker mapping to IUSQ.DE sooner.
 
 ## What I'd Change If I Ran It Back
 
-1. The SPYI.DE cost-basis anomaly has now been flagged in two consecutive runs without resolution. Flagging and waiting is not enough — the Open Questions section needs to ask for a concrete human action, not just note the problem.
-2. FRED macro data has failed for two consecutive weeks. Brent crude has no price at all in the snapshot. Accepting a structurally degraded macro section passively is a recurring mistake; the question of a fallback data source should be escalated.
+1. Check ISIN-to-ticker mappings before treating a cost-basis mismatch as a broker CSV problem.
+2. Keep the opportunity score table separate from recommendations so high-scoring stocks do not become automatic buys.
+3. Replace stale or failing tickers quickly, as with AGGH.DE to EUNA.DE.
 
 ## Open Questions
 
-1. **SPYI.DE cost basis (action required):** avg cost €93.89 per share vs current price €10.58 implies an 89% discrepancy on a fund whose 52-week range is €9.33–€12.24. Check transactions.csv for duplicate rows, wrong currency entries, or a stale lot from a different instrument. The agent cannot evaluate this position — add, sell, or P&L — until the data is clean.
-2. **FRED data failure (week 2):** Brent crude, German bund yield, and formal yield-curve data are all ERROR for a second straight week. If the API key is expired or rate-limited, consider adding a Yahoo Finance fallback (e.g., BZ=F for Brent) to the snapshot script.
-3. **AGGH.DE no price data (week 2):** bond ETF candidate has returned no data two weeks running. Confirm the ticker is still active and priced on Scalable Capital before the agent can consider it as a buy candidate.
-4. **BBAI ring-fence review:** at $3.70 (avg cost $3.922), -36.7% YTD and -19% from EUR cost basis, this position drifts further negative each week it is deferred. Consider setting a personal price threshold so the exit decision is deliberate, not reactive.
+- Should BBAI remain ring-fenced, or should you define a personal review price/date for it?
+- Do you want the tactical sleeve to allow only mega-cap profitable stocks, or also smaller high-volatility names?
+- Should the weekly report include a suggested maximum EUR amount for the tactical sleeve based on current portfolio value?

@@ -1,18 +1,19 @@
 # Trading Research Agent
 
 A weekly trading research agent that runs on GitHub Actions, analyses your
-watchlist and portfolio, and publishes a dashboard to GitHub Pages.
+watchlist and portfolio, scores short-term opportunities, and publishes a
+dashboard to GitHub Pages.
 
-**It does not execute trades.** It produces a weekly report with max 3 buy
-and 3 sell picks. You read the report, decide, and place orders manually
-on Scalable Capital (or wherever you trade).
+**It does not execute trades.** It produces a weekly report with core and
+tactical recommendations. You read the report, decide, and place orders
+manually on Scalable Capital (or wherever you trade).
 
 ## How it works
 
 Every Friday at 19:00 UTC (20:00 CET / 21:00 CEST):
 
 1. A Python script fetches fresh price data (yfinance) and macro indicators (FRED).
-2. Claude reads your portfolio, watchlist, prior picks, and market data.
+2. Claude reads your portfolio, watchlist, prior picks, market data, opportunity scores, and risk rules.
 3. Claude grades last week's recommendations against current prices.
 4. Claude writes a new research report with buy/sell/hold verdicts.
 5. A render script converts the report to a static HTML dashboard.
@@ -37,15 +38,17 @@ dark-mode aware) split into eight scannable sections:
 4. **Holdings table** — position, quantity, avg cost, current price, EUR
    value, a centred P&L bar (green right / red left, globally scaled), the
    week's move, and a `ring-fenced` badge where applicable.
-5. **Watchlist candidates** — one card per candidate with price, 1w, YTD,
+5. **Opportunity scores** — ranked short-term triage table blending momentum,
+   fundamentals, analyst tone, liquidity, and recent headline tone.
+6. **Watchlist candidates** — one card per candidate with price, 1w, YTD,
    UCITS badge, TER, and a dot on the 52-week range.
-6. **Decision timeline** — the last 12 weeks as horizontal dots, coloured
+7. **Decision timeline** — the last 12 weeks as horizontal dots, coloured
    green (BUY) / red (SELL) / grey (HOLD), with the date and picks on hover.
-7. **Flags & open issues** — auto-generated from the data: FRED fetch
+8. **Flags & open issues** — auto-generated from the data: FRED fetch
    errors, stale snapshot, held positions missing from the snapshot,
    cost-basis outside 52w range, low cash, and >10% weekly moves on
    ring-fenced positions.
-8. **Full prose report** — the week's `latest.md` rendered as HTML inside a
+9. **Full prose report** — the week's `latest.md` rendered as HTML inside a
    collapsed `<details>` block for when you want the agent's full reasoning.
 
 Graceful placeholders kick in when data is missing (FRED errors, stale or
@@ -86,8 +89,8 @@ empty snapshot, tickers yfinance couldn't fetch) — the page still renders.
 | `memory/learnings.md` | agent | Appended reflections across runs |
 | `memory/market_snapshot.md` | script | Fresh price + macro data (overwritten each run) |
 | `skills/research.md` | repo | Output template the agent must follow |
-| `skills/risk_check.md` | repo | 10 hard gates every pick must pass |
-| `scripts/fetch_market_data.py` | repo | Fetches yfinance + FRED data |
+| `skills/risk_check.md` | repo | 12 hard gates every pick must pass |
+| `scripts/fetch_market_data.py` | repo | Fetches yfinance + FRED data, fundamentals, analyst metadata, and headline tone |
 | `scripts/render_dashboard.py` | repo | Renders latest.md → index.html |
 | `docs/latest.md` | agent | Most recent weekly report (markdown) |
 | `docs/index.html` | script | Rendered dashboard for GitHub Pages |

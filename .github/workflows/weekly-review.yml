@@ -84,7 +84,8 @@ jobs:
             (CLAUDE.md, skills/*, memory/* concatenated). Then do exactly 3 file writes: \
             (1) Overwrite docs/latest.md with the weekly report following the research.md \
             template. Use only prices from market_snapshot. Never invent numbers. Max 1 \
-            new BUY per portfolio rules. Every pick needs 'Why I could be wrong'. If no \
+            core BUY and max 1 tactical BUY per portfolio rules. Every pick needs \
+            'Why I could be wrong'; tactical picks also need an exit plan. If no \
             prior picks exist, write 'First run — no prior picks to grade' in the retro. \
             (2) Append a '## $(date -u +%Y-%m-%d)' section to memory/trade_log.md with \
             picks or '**No picks this week.**' \

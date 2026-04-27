@@ -1,86 +1,102 @@
-# Risk Check — 10 Hard Gates
+# Risk Check - 12 Hard Gates
 
-Every pick must pass all 10 gates or be dropped silently from the output.
+Every pick must pass all 12 gates or be dropped silently from the output.
 Do not list failed candidates. Do not explain why they failed.
 
 Read position limits and rules from `memory/portfolio.md` each run.
-Do not hardcode values here — portfolio.md is the single source of truth.
+Do not hardcode portfolio values here. `portfolio.md` is the single source of truth.
 
 ---
 
-## Gate 1 — Position Size
+## Gate 1 - Position Size
 
-- Non-ETF single position > 15% of portfolio → **fail**
-- ETF single position > 60% of portfolio → **fail**
-- Order size < €250 → **warn** in the pick: "Below €250 gettex threshold — broker fee applies"
-  (do not auto-upsize; flag and let the human decide)
+- Non-ETF single position above the portfolio cap in `portfolio.md` -> fail.
+- ETF single position above the portfolio cap in `portfolio.md` -> fail.
+- Order size below the configured broker threshold -> warn in the pick.
 
-## Gate 2 — Concentration
+## Gate 2 - Core vs Tactical Sleeve
 
-- Total equity allocation > 90% of portfolio → **fail** the new equity buy
-- Single sector > 40% of portfolio → **warn** in the pick
-- Check against both current holdings and the proposed addition combined
+- Classify every BUY as `core` or `tactical`.
+- Core buys must fit the long-term allocation plan.
+- Tactical buys must fit inside the 20% tactical sleeve.
+- A new tactical position must not exceed 5% of total portfolio or 25% of the tactical sleeve, whichever is smaller.
 
-## Gate 3 — Cash Reserve
+## Gate 3 - Concentration
 
-- If the buy would leave cash below the minimum reserve in portfolio.md (default €500) → **fail**
-- Calculate using: current cash − proposed buy size ≥ min reserve
+- Total equity allocation above the cap in `portfolio.md` -> fail the new equity buy.
+- Single sector above the cap in `portfolio.md` -> warn in the pick.
+- Check both current holdings and the proposed addition.
 
-## Gate 4 — Duplicate Exposure
+## Gate 4 - Cash Reserve
 
-- If the same underlying index is already held through another instrument,
-  recommend adding to the existing position rather than buying a new ticker.
-- Example: already hold SXR8.DE (S&P 500) → do not also buy VOO. Add to SXR8.DE.
+- If the buy would leave cash below the minimum reserve in `portfolio.md` -> fail.
+- Calculate using: current cash - proposed buy size >= min reserve.
 
-## Gate 5 — FX Sanity
+## Gate 5 - Duplicate Exposure
 
-- If a UCITS-listed version exists with TER within 0.30% of the US-listed version,
-  prefer the UCITS version (tax efficiency, EUR settlement, no W-8BEN).
-- Note the TER difference in the pick if you choose UCITS over a cheaper US-listed alternative.
+- If the same underlying index is already held through another instrument, recommend adding to the existing position rather than buying a new ticker.
+- Example: already hold SXR8.DE for S&P 500 exposure -> do not also buy VOO.
 
-## Gate 6 — Freshness
+## Gate 6 - FX Sanity
 
-- Ticker sold in the last 4 weeks (check trade_log.md) → must include explicit
-  justification for re-entry. What changed since the sell?
-- Ticker bought in the last 2 weeks without a subsequent > 5% move → **fail**.
-  Avoid churning the same name. Let positions develop.
+- If a UCITS-listed version exists with TER within 0.30% of the US-listed version, prefer the UCITS version for core allocation.
+- Tactical single stocks may be USD-listed, but the pick must show the USD price and EUR equivalent using EUR/USD from `market_snapshot.md`.
 
-## Gate 7 — No-Fly List
+## Gate 7 - Freshness
 
-- Check the no-fly list in portfolio.md.
-- If the ticker appears on the list → **fail**. No exceptions, no justifications.
+- Ticker sold in the last 4 weeks -> must include explicit justification for re-entry.
+- Ticker bought in the last 2 weeks without a subsequent >5% move -> fail.
+- Avoid churning the same name.
 
-## Gate 8 — Asset Class
+## Gate 8 - No-Fly List
 
-- Options → **fail**
-- Leveraged products (2x, 3x, inverse) → **fail**
-- CFDs → **fail**
-- Crypto spot / direct crypto holdings → **fail**
-- Crypto ETPs → allowed, but total crypto ETP allocation must stay ≤ 5% of portfolio
+- Check the no-fly list in `portfolio.md`.
+- If the ticker appears on the list or clearly violates it -> fail.
 
-## Gate 9 — Tax Awareness
+## Gate 9 - Asset Class
 
-- Prefer accumulating (Acc) share classes over distributing — avoids annual
-  Vorabpauschale complexity and reinvestment friction.
-- Flag Teilfreistellung category on every pick:
-  (TFS: equity 30%), (TFS: mixed 15%), (TFS: none)
-- Prefer Irish (IE) domicile over Luxembourg (LU) for funds holding US equities
-  (15% vs 30% US withholding tax under the IE-US treaty).
+- Options -> fail.
+- Leveraged products -> fail.
+- Inverse products -> fail.
+- CFDs -> fail.
+- Crypto spot or crypto ETPs -> fail while `portfolio.md` says they are disallowed.
+- Plain cash equities and plain UCITS funds are allowed if the other gates pass.
+
+## Gate 10 - Tax Awareness
+
+- Prefer accumulating UCITS funds over distributing funds for core holdings.
+- Flag Teilfreistellung category on every fund pick: equity 30%, mixed 15%, or none.
+- Prefer Irish domicile for funds holding US equities when comparable choices exist.
 - If a tax edge case arises, note: "Check with your Steuerberater."
 
-## Gate 10 — Reason Good Enough
+## Gate 11 - Tactical Evidence
+
+Tactical BUYs need at least three of these five:
+
+- Opportunity Score >= 65 in `market_snapshot.md`.
+- Positive 1m or 3m trend.
+- Revenue growth or profit margin is positive.
+- News tone is positive or neutral.
+- Relative volume is above 1.0 or analyst mean is constructive.
+
+If fewer than three are present -> fail.
+
+## Gate 12 - Reason and Exit Plan Good Enough
 
 - The thesis must have exactly 3 concrete bullets without hedging.
-  "Looks interesting" or "might go up" is not a bullet. Cite data.
+- "Looks interesting" or "might go up" is not a bullet. Cite data.
 - The "Why I could be wrong" section must have 2 credible scenarios.
-  "Black swan event" is not credible — it's a cop-out.
-- If you cannot fill both sections convincingly → **fail**. Move the ticker
-  to "Open Questions" in the report instead.
+- Every tactical pick must include:
+  - profit-taking zone,
+  - invalidation trigger,
+  - maximum acceptable loss,
+  - review date or maximum holding window.
+- If you cannot fill these convincingly -> fail.
 
 ---
 
-## Processing rule
+## Processing Rule
 
-Run all 10 gates on every candidate before writing the output.
+Run all 12 gates on every candidate before writing the output.
 Failed candidates are dropped silently. The reader sees only picks that passed.
-Do not mention the gates, the failures, or the filtering process in docs/latest.md.
+Do not mention the gates, failures, or filtering process in `docs/latest.md`.

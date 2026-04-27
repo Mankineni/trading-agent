@@ -5,15 +5,17 @@
 - I am **new to investing** and intentionally starting small to learn.
 - I am using this agent to **understand reasoning**, not to get rich fast.
 - I will execute every trade manually in Scalable Capital on Saturdays.
-- I expect to hold positions for **years, not weeks**.
+- I want a **barbell plan**: most money stays in a disciplined core, while a limited tactical sleeve can look for shorter-term opportunities.
 - If the agent recommends something I don't understand, I will NOT act on it — I'll ask for clarification instead.
 
 ## Goals
 
 - **Primary benchmark:** VWCE.DE (Vanguard FTSE All-World) — if I can't beat this over 5+ years, I should just hold it and stop picking.
-- **Horizon:** 10+ years. I don't need this money back anytime soon.
-- **Risk appetite:** I can probably stomach a 20–30% drawdown without panic-selling, but I haven't been tested yet. Respect this — don't push me into aggressive positions until I've seen a real drawdown.
-- **Phase:** Learning phase. First 6 months are about building intuition, not maximising return.
+- **Core horizon:** 5-10+ years. This is the default home for most money.
+- **Tactical horizon:** days to 12 weeks. This is only for high-risk ideas with a clear exit plan.
+- **Risk appetite:** I am willing to risk more inside the tactical sleeve, but I do not want the whole portfolio to behave like a bet.
+- **Portfolio split:** target **80% core / 20% tactical**. Tactical means higher risk and faster review; it does not mean reckless sizing.
+- **Phase:** Learning phase. The agent may surface tactical ideas, but every idea must be explainable in plain language and must include what would prove it wrong.
 
 ## Cash & Sparplan
 
@@ -48,13 +50,13 @@ If/when I decide to sell or reduce BBAI, I'll edit this file to change its statu
 These are tuned for someone just starting out. Tighter than the default template. I'll relax them as I gain experience.
 
 1. **Max position size:** 40% of total portfolio in any single ETF, 15% in any single stock. (Applies to `active` positions only; `ring-fenced` is excluded.)
-2. **Max new buys per week:** 1. (Yes, one. I'm learning — I don't need the agent throwing multiple picks at me.)
+2. **Max new buys per week:** 1 core buy plus 1 tactical buy. Zero is always acceptable.
 3. **Min cash reserve:** €50 always stays in cash.
 4. **Sparplan is sacred:** the agent must NEVER recommend selling something I'm actively Sparplan-ing, and must NEVER recommend buying the same ticker my Sparplan already buys (that would just double up).
-5. **No NEW single-stock positions in my first 6 months.** (Existing ring-fenced positions are grandfathered.)
+5. **Tactical sleeve for single stocks:** single-stock ideas are allowed only inside the 20% tactical sleeve. Max new tactical position = 5% of total portfolio or 25% of the tactical sleeve, whichever is smaller.
 6. **No-fly list:** no tobacco, no weapons, no fossil fuel majors.
 7. **Minimum order size:** **€250+**
-8. **No leverage, no options, no single-stock derivatives, no crypto spot, no crypto ETPs** during the first 6 months. Reconsider after.
+8. **No leverage, no options, no single-stock derivatives, no crypto spot, no crypto ETPs.** Quick wins must come from cash equities or plain UCITS funds only.
 9. **Prefer accumulating UCITS ETFs** over distributing ones.
 10. **Prefer Ireland-domiciled (IE…) UCITS** for US exposure — better tax treatment on US dividends.
 
@@ -93,3 +95,5 @@ Not "beat the S&P." Success in year 1 is:
 - Remember I'm learning. When you recommend something, **explain WHY in plain language a beginner can follow**, not in jargon.
 - My Sparplan runs automatically on Scalable. Don't suggest buys that duplicate it.
 - Treat any position marked `ring-fenced` as out of scope: don't recommend buying or selling, but include in retro/observations if it moves materially (>10% in a week or >25% in a month).
+- For every tactical idea, include an **exit plan**: profit-taking zone, invalidation trigger, and maximum acceptable loss. If those cannot be written clearly, do not recommend the trade.
+- Do not call anything a "quick win" unless the data supports a near-term catalyst or trend. Use "tactical idea" for risky short-term opportunities.

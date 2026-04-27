@@ -190,7 +190,10 @@ def parse_watchlist(text: str) -> list[dict]:
 
 def parse_market_snapshot(text: str) -> dict:
     if not text:
-        return {"tickers": {}, "fred": [], "missing": [], "generated_at": None, "stale": False}
+        return {
+            "tickers": {}, "opportunities": [], "fred": [],
+            "missing": [], "generated_at": None, "stale": False,
+        }
 
     generated_at = None
     m = re.search(r"Generated:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
@@ -224,6 +227,33 @@ def parse_market_snapshot(text: str) -> dict:
                     "mcap": row.get("Mkt Cap", "").strip(),
                 }
 
+    opportunities: list[dict] = []
+    after_scores = text.split("## Opportunity Scores", 1)
+    if len(after_scores) == 2:
+        section = re.split(r"^##\s", after_scores[1], maxsplit=1, flags=re.MULTILINE)[0]
+        tables = parse_all_tables(section)
+        if tables:
+            for row in tables[0]:
+                ticker = row.get("Ticker", "").strip()
+                if not ticker:
+                    continue
+                opportunities.append({
+                    "ticker": ticker,
+                    "score": safe_float(row.get("Score")),
+                    "trend_1m": safe_pct(row.get("1m trend")),
+                    "trend_3m": safe_pct(row.get("3m trend")),
+                    "revenue": row.get("Revenue", "").strip(),
+                    "revenue_growth": safe_pct(row.get("Revenue growth")),
+                    "profit_margin": safe_pct(row.get("Profit margin")),
+                    "debt_equity": safe_float(row.get("Debt/Equity")),
+                    "rel_volume": safe_float(row.get("Rel volume")),
+                    "analyst_mean": safe_float(row.get("Analyst mean")),
+                    "target_upside": safe_pct(row.get("Target upside")),
+                    "news_tone": row.get("News tone", "").strip(),
+                    "score_notes": row.get("Score notes", "").strip(),
+                })
+    opportunities.sort(key=lambda x: x["score"] if x["score"] is not None else -1, reverse=True)
+
     fred: list[dict] = []
     after_fred = text.split("## Macro Indicators", 1)
     if len(after_fred) == 2:
@@ -254,6 +284,7 @@ def parse_market_snapshot(text: str) -> dict:
 
     return {
         "tickers": tickers,
+        "opportunities": opportunities,
         "fred": fred,
         "missing": missing,
         "generated_at": generated_at,
@@ -601,6 +632,50 @@ def build_holdings(holdings: list[dict], snapshot: dict, eurusd: float | None) -
     )
 
 
+def build_opportunities(snapshot: dict) -> str:
+    opportunities = snapshot.get("opportunities") or []
+    if not opportunities:
+        return ""
+
+    rows = []
+    for o in opportunities[:12]:
+        score = o.get("score")
+        score_str = "—" if score is None else f"{score:.0f}"
+        score_cls = ""
+        if score is not None:
+            if score >= 70:
+                score_cls = "up"
+            elif score < 45:
+                score_cls = "down"
+
+        rows.append(
+            '<tr>'
+            f'<td><strong>{esc(o["ticker"])}</strong>'
+            f'<div class="muted small">{esc(o.get("score_notes", ""))}</div></td>'
+            f'<td class="num {score_cls}">{score_str}</td>'
+            f'<td class="num {pct_class(o.get("trend_1m"))}">{fmt_pct(o.get("trend_1m"))}</td>'
+            f'<td class="num {pct_class(o.get("trend_3m"))}">{fmt_pct(o.get("trend_3m"))}</td>'
+            f'<td class="num">{esc(o.get("revenue") or "—")}</td>'
+            f'<td class="num {pct_class(o.get("revenue_growth"))}">{fmt_pct(o.get("revenue_growth"))}</td>'
+            f'<td class="num {pct_class(o.get("profit_margin"))}">{fmt_pct(o.get("profit_margin"))}</td>'
+            f'<td class="num">{fmt_pct(o.get("target_upside"))}</td>'
+            f'<td>{esc(o.get("news_tone") or "—")}</td>'
+            '</tr>'
+        )
+
+    return (
+        '<section class="card">'
+        '<div class="section-label">Opportunity scores</div>'
+        '<p class="muted small score-note">Short-term research triage only. A high score still needs the risk gates, thesis, sizing, and an exit plan.</p>'
+        '<div class="table-wrap"><table class="holdings opportunities"><thead><tr>'
+        '<th>Ticker</th><th class="num">Score</th><th class="num">1m</th>'
+        '<th class="num">3m</th><th class="num">Revenue</th><th class="num">Rev growth</th>'
+        '<th class="num">Margin</th><th class="num">Target</th><th>News</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        '</section>'
+    )
+
+
 def build_watchlist(candidates: list[dict], snapshot: dict) -> str:
     if not candidates:
         return ""
@@ -925,6 +1000,8 @@ body {
 }
 .holdings tbody tr:last-child td { border-bottom: none; }
 .holdings td.num, .holdings th.num { text-align: right; }
+.opportunities td:first-child { min-width: 220px; }
+.score-note { margin-bottom: 0.75rem; }
 
 .badge {
   display: inline-block; padding: 0.08rem 0.45rem; border-radius: 4px;
@@ -1097,6 +1174,7 @@ def main() -> None:
         build_macro(latest, snapshot),
         build_allocation(holdings, cash or 0.0, snapshot, eurusd),
         build_holdings(holdings, snapshot, eurusd),
+        build_opportunities(snapshot),
         build_watchlist(candidates, snapshot),
         build_timeline(trade_log),
         build_flags(holdings, cash, sparplan, snapshot, holdings_stale),
