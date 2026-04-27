@@ -12,6 +12,7 @@ Do not hardcode portfolio values here. `portfolio.md` is the single source of tr
 
 - Non-ETF single position above the portfolio cap in `portfolio.md` -> fail.
 - ETF single position above the portfolio cap in `portfolio.md` -> fail.
+- Single-stock BUY where one share costs more than 25% of current total portfolio value -> fail.
 - Order size below the configured broker threshold -> warn in the pick.
 
 ## Gate 2 - Core vs Tactical Sleeve

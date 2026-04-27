@@ -30,6 +30,7 @@ Explicitly say whether there is a core buy, tactical buy, sell, or no action.
 
 Summarize the top scored candidates from `market_snapshot.md`.
 Do not recommend them automatically. Explain what the score says and what it does not say.
+Omit single-stock candidates whose current share price is more than 25% of total portfolio value.
 
 | Ticker | Score | Signal read | Action |
 |--------|------:|-------------|--------|

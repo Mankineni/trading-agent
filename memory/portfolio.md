@@ -62,6 +62,8 @@ These are tuned for someone just starting out. Tighter than the default template
 
 ### Minimum order size rule — customize based on your Scalable plan
 
+11. **Single-share affordability:** do not recommend a single-stock BUY if one share costs more than 25% of the current total portfolio value. This keeps tactical ideas realistic for a small account.
+
 **Pick ONE of these and delete the other:**
 
 - **If Scalable FREE:** "No minimum order size. I pay €0.99 per trade on gettex regardless of size. Size orders based on conviction and thesis, not venue fees."

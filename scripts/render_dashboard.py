@@ -23,6 +23,8 @@ TIMELINE_WEEKS = 12
 RING_FENCED_MOVE_PCT = 10.0
 STALE_SNAPSHOT_DAYS = 8
 MIN_CASH_RESERVE_EUR = 50.0
+TOP_LIST_LIMIT = 5
+MAX_SINGLE_SHARE_FRACTION = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +341,40 @@ def eur_value(qty: float | None, price: float | None, currency: str, eurusd: flo
     return qty * price
 
 
+def unit_price_eur(price: float | None, currency: str, eurusd: float | None) -> float | None:
+    if price is None:
+        return None
+    if currency == "USD":
+        if not eurusd:
+            return None
+        return price / eurusd
+    return price
+
+
+def priced_portfolio_total(holdings: list[dict], cash: float, snapshot: dict, eurusd: float | None) -> float:
+    total = cash or 0.0
+    for h in holdings:
+        t = snapshot["tickers"].get(h["ticker"], {})
+        val = eur_value(h["qty"], t.get("close"), t.get("currency") or "EUR", eurusd)
+        if val is not None:
+            total += val
+    return total
+
+
+def is_single_stock_ticker(ticker: str) -> bool:
+    return "." not in ticker and not ticker.startswith("^") and ticker != "EURUSD=X"
+
+
+def is_affordable_single_share(ticker: str, price: float | None, currency: str, eurusd: float | None,
+                               portfolio_total: float | None) -> bool:
+    if not portfolio_total or not is_single_stock_ticker(ticker):
+        return True
+    price_eur = unit_price_eur(price, currency, eurusd)
+    if price_eur is None:
+        return False
+    return price_eur <= portfolio_total * MAX_SINGLE_SHARE_FRACTION
+
+
 def fmt_eur(v: float | None) -> str:
     return "—" if v is None else f"€{v:,.2f}"
 
@@ -402,6 +438,60 @@ def build_banner(trade_log: list[dict]) -> str:
     )
 
 
+def build_decision_summary(holdings: list[dict], cash: float, snapshot: dict, eurusd: float | None,
+                           trade_log: list[dict]) -> str:
+    total = priced_portfolio_total(holdings, cash, snapshot, eurusd)
+    max_share = total * MAX_SINGLE_SHARE_FRACTION if total else None
+    latest = trade_log[0] if trade_log else None
+    decision = "HOLD"
+    if latest and latest["buys"]:
+        decision = "BUY"
+    elif latest and latest["sells"]:
+        decision = "SELL"
+
+    active_value = 0.0
+    ring_value = 0.0
+    for h in holdings:
+        t = snapshot["tickers"].get(h["ticker"], {})
+        val = eur_value(h["qty"], t.get("close"), t.get("currency") or "EUR", eurusd)
+        if val is None:
+            continue
+        if h.get("status") == "ring-fenced":
+            ring_value += val
+        else:
+            active_value += val
+
+    cards = [
+        ("This week", decision, "Latest logged action"),
+        ("Account size", fmt_eur(total), "Priced holdings plus cash"),
+        ("Free cash", fmt_eur(cash), "Cash available before reserve"),
+        ("Max stock price", fmt_eur(max_share), "Single share cap: 25% of account"),
+    ]
+    card_html = "".join(
+        f'<a class="summary-card" href="#{anchor}">'
+        f'<span>{esc(label)}</span><strong>{esc(value)}</strong><em>{esc(note)}</em>'
+        '</a>'
+        for (label, value, note), anchor in zip(
+            cards,
+            ["portfolio", "portfolio", "portfolio", "opportunities"],
+        )
+    )
+    return (
+        '<section class="summary-grid" aria-label="At a glance">'
+        f'{card_html}'
+        '</section>'
+        '<nav class="jump-nav" aria-label="Dashboard sections">'
+        '<a href="#portfolio">Portfolio</a>'
+        '<a href="#opportunities">Top scores</a>'
+        '<a href="#watchlist">Watchlist</a>'
+        '<a href="#flags">Flags</a>'
+        '<a href="#report">Report</a>'
+        '</nav>'
+        f'<p class="muted small dashboard-note">Active priced value: {fmt_eur(active_value)}. '
+        f'Ring-fenced value: {fmt_eur(ring_value)}. Single stocks above {fmt_eur(max_share)} per share are hidden from top ideas for this account size.</p>'
+    )
+
+
 def build_macro(latest: dict, snapshot: dict) -> str:
     regime = latest.get("regime")
     if not regime:
@@ -455,7 +545,7 @@ def build_macro(latest: dict, snapshot: dict) -> str:
     gen = snapshot.get("generated_at")
     gen_str = gen.strftime("%Y-%m-%d %H:%M") if gen else "unknown"
     return (
-        '<section class="card">'
+        '<section class="card" id="macro">'
         '<div class="section-label">Macro backdrop</div>'
         f'<div class="regime regime-{regime_class}">Regime: <strong>{regime.upper()}</strong>'
         f'<span class="muted small"> · snapshot {esc(gen_str)}</span></div>'
@@ -484,7 +574,7 @@ def build_allocation(holdings: list[dict], cash: float, snapshot: dict, eurusd: 
         if missing:
             note = f'<p class="muted small">No price for: {esc(", ".join(missing))}</p>'
         return (
-            '<section class="card"><div class="section-label">Allocation</div>'
+            '<section class="card" id="portfolio"><div class="section-label">Allocation</div>'
             f'{note}</section>'
         )
 
@@ -522,7 +612,7 @@ def build_allocation(holdings: list[dict], cash: float, snapshot: dict, eurusd: 
         missing_note = f'<p class="muted small">No price for: {esc(", ".join(missing))} — excluded from total.</p>'
 
     return (
-        '<section class="card">'
+        '<section class="card" id="portfolio">'
         '<div class="section-label">Allocation</div>'
         '<div class="alloc-wrap">'
         '<svg viewBox="0 0 180 180" class="donut" role="img" aria-label="Portfolio allocation">'
@@ -541,7 +631,7 @@ def build_allocation(holdings: list[dict], cash: float, snapshot: dict, eurusd: 
 def build_holdings(holdings: list[dict], snapshot: dict, eurusd: float | None) -> str:
     if not holdings:
         return (
-            '<section class="card">'
+            '<section class="card" id="holdings">'
             '<div class="section-label">Holdings</div>'
             '<p class="muted">No open positions.</p>'
             '</section>'
@@ -621,7 +711,7 @@ def build_holdings(holdings: list[dict], snapshot: dict, eurusd: float | None) -
         )
 
     return (
-        '<section class="card">'
+        '<section class="card" id="holdings">'
         '<div class="section-label">Holdings</div>'
         '<div class="table-wrap"><table class="holdings"><thead><tr>'
         '<th>Position</th><th class="num">Qty</th><th class="num">Avg cost (EUR)</th>'
@@ -632,13 +722,31 @@ def build_holdings(holdings: list[dict], snapshot: dict, eurusd: float | None) -
     )
 
 
-def build_opportunities(snapshot: dict) -> str:
+def build_opportunities(snapshot: dict, portfolio_total: float | None, eurusd: float | None) -> str:
     opportunities = snapshot.get("opportunities") or []
     if not opportunities:
-        return ""
+        return (
+            '<section class="card" id="opportunities">'
+            f'<div class="section-label">Top {TOP_LIST_LIMIT} opportunity scores</div>'
+            '<p class="muted">No opportunity score data in the current market snapshot.</p>'
+            '</section>'
+        )
+
+    eligible = []
+    for o in opportunities:
+        ticker = o["ticker"]
+        t = snapshot["tickers"].get(ticker, {})
+        if is_affordable_single_share(
+            ticker=ticker,
+            price=t.get("close"),
+            currency=t.get("currency") or "EUR",
+            eurusd=eurusd,
+            portfolio_total=portfolio_total,
+        ):
+            eligible.append(o)
 
     rows = []
-    for o in opportunities[:12]:
+    for o in eligible[:TOP_LIST_LIMIT]:
         score = o.get("score")
         score_str = "—" if score is None else f"{score:.0f}"
         score_cls = ""
@@ -649,9 +757,9 @@ def build_opportunities(snapshot: dict) -> str:
                 score_cls = "down"
 
         rows.append(
-            '<tr>'
-            f'<td><strong>{esc(o["ticker"])}</strong>'
-            f'<div class="muted small">{esc(o.get("score_notes", ""))}</div></td>'
+            '<tr class="click-row">'
+            f'<td><details><summary><strong>{esc(o["ticker"])}</strong></summary>'
+            f'<div class="muted small detail-copy">{esc(o.get("score_notes", ""))}</div></details></td>'
             f'<td class="num {score_cls}">{score_str}</td>'
             f'<td class="num {pct_class(o.get("trend_1m"))}">{fmt_pct(o.get("trend_1m"))}</td>'
             f'<td class="num {pct_class(o.get("trend_3m"))}">{fmt_pct(o.get("trend_3m"))}</td>'
@@ -663,10 +771,18 @@ def build_opportunities(snapshot: dict) -> str:
             '</tr>'
         )
 
+    if not rows:
+        return (
+            '<section class="card" id="opportunities">'
+            f'<div class="section-label">Top {TOP_LIST_LIMIT} opportunity scores</div>'
+            '<p class="muted">No eligible single-stock scores after the account-size price filter.</p>'
+            '</section>'
+        )
+
     return (
-        '<section class="card">'
-        '<div class="section-label">Opportunity scores</div>'
-        '<p class="muted small score-note">Short-term research triage only. A high score still needs the risk gates, thesis, sizing, and an exit plan.</p>'
+        '<section class="card" id="opportunities">'
+        f'<div class="section-label">Top {TOP_LIST_LIMIT} opportunity scores</div>'
+        '<p class="muted small score-note">Short-term research triage only. Expensive single stocks are hidden when one share costs more than 25% of the account.</p>'
         '<div class="table-wrap"><table class="holdings opportunities"><thead><tr>'
         '<th>Ticker</th><th class="num">Score</th><th class="num">1m</th>'
         '<th class="num">3m</th><th class="num">Revenue</th><th class="num">Rev growth</th>'
@@ -676,11 +792,24 @@ def build_opportunities(snapshot: dict) -> str:
     )
 
 
-def build_watchlist(candidates: list[dict], snapshot: dict) -> str:
+def build_watchlist(candidates: list[dict], snapshot: dict, portfolio_total: float | None,
+                    eurusd: float | None) -> str:
     if not candidates:
         return ""
-    cards = []
+    eligible = []
     for c in candidates:
+        t = snapshot["tickers"].get(c["ticker"], {})
+        if is_affordable_single_share(
+            ticker=c["ticker"],
+            price=t.get("close"),
+            currency=t.get("currency") or "EUR",
+            eurusd=eurusd,
+            portfolio_total=portfolio_total,
+        ):
+            eligible.append(c)
+
+    cards = []
+    for c in eligible[:TOP_LIST_LIMIT]:
         t = snapshot["tickers"].get(c["ticker"], {})
         price = t.get("close")
         wk = t.get("1w")
@@ -711,11 +840,12 @@ def build_watchlist(candidates: list[dict], snapshot: dict) -> str:
 
         cards.append(
             '<div class="watch-card">'
-            '<div class="watch-head">'
-            f'<div><div class="watch-ticker">{esc(c["ticker"])}{ucits_badge}</div>'
-            f'<div class="muted small">{esc(c["name"])}</div></div>'
-            f'<div class="watch-price">{price_str}</div>'
-            '</div>'
+            '<details>'
+            '<summary class="watch-head">'
+            f'<span><span class="watch-ticker">{esc(c["ticker"])}{ucits_badge}</span>'
+            f'<span class="muted small watch-name">{esc(c["name"])}</span></span>'
+            f'<span class="watch-price">{price_str}</span>'
+            '</summary>'
             '<div class="watch-stats">'
             f'<span>1w <span class="{pct_class(wk)}">{fmt_pct(wk) if wk is not None else "—"}</span></span>'
             f'<span>YTD <span class="{pct_class(ytd)}">{fmt_pct(ytd) if ytd is not None else "—"}</span></span>'
@@ -723,11 +853,12 @@ def build_watchlist(candidates: list[dict], snapshot: dict) -> str:
             '</div>'
             f'{range_html}'
             f'<div class="watch-notes muted small">{esc(c["notes"])}</div>'
+            '</details>'
             '</div>'
         )
     return (
-        '<section class="card">'
-        '<div class="section-label">Watchlist candidates</div>'
+        '<section class="card" id="watchlist">'
+        f'<div class="section-label">Top {TOP_LIST_LIMIT} watchlist candidates</div>'
         f'<div class="watch-grid">{"".join(cards)}</div>'
         '</section>'
     )
@@ -752,7 +883,7 @@ def build_timeline(trade_log: list[dict], n: int = TIMELINE_WEEKS) -> str:
             tip += " — " + "; ".join(e["sells"])
         dots.append(f'<div class="tl-dot {cls}" title="{esc(tip)}"></div>')
     return (
-        '<section class="card">'
+        '<section class="card" id="timeline">'
         f'<div class="section-label">Decision timeline · last {n} weeks</div>'
         f'<div class="timeline">{"".join(dots)}</div>'
         '<div class="timeline-legend">'
@@ -830,7 +961,7 @@ def build_flags(
         body = f'<ul class="flag-list">{items}</ul>'
 
     return (
-        '<section class="card">'
+        '<section class="card" id="flags">'
         '<div class="section-label">Flags &amp; open issues</div>'
         f'{body}'
         '</section>'
@@ -839,7 +970,7 @@ def build_flags(
 
 def build_prose(latest_html: str) -> str:
     return (
-        '<section class="card">'
+        '<section class="card" id="report">'
         '<details>'
         '<summary class="section-label clickable">Full prose report ▾</summary>'
         f'<div class="prose">{latest_html}</div>'
@@ -941,6 +1072,53 @@ body {
 }
 .banner-sub { margin-top: 0.4rem; font-size: 0.95rem; opacity: 0.9; }
 
+/* Dashboard controls */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+@media (max-width: 760px) { .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  color: var(--fg);
+  text-decoration: none;
+  box-shadow: var(--shadow);
+}
+.summary-card:hover { border-color: var(--accent); }
+.summary-card span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.summary-card strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.summary-card em { color: var(--muted); font-style: normal; font-size: 0.78rem; }
+.jump-nav {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.jump-nav a {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.32rem 0.7rem;
+  color: var(--fg);
+  background: var(--card);
+  text-decoration: none;
+  font-size: 0.84rem;
+}
+.jump-nav a:hover { border-color: var(--accent); color: var(--accent); }
+.dashboard-note { margin: 0 0 1rem; }
+
 /* Regime line */
 .regime {
   display: inline-block;
@@ -1002,6 +1180,9 @@ body {
 .holdings td.num, .holdings th.num { text-align: right; }
 .opportunities td:first-child { min-width: 220px; }
 .score-note { margin-bottom: 0.75rem; }
+.click-row summary { cursor: pointer; list-style: none; }
+.click-row summary::-webkit-details-marker { display: none; }
+.detail-copy { margin-top: 0.25rem; max-width: 420px; }
 
 .badge {
   display: inline-block; padding: 0.08rem 0.45rem; border-radius: 4px;
@@ -1040,9 +1221,12 @@ body {
   border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem 1rem;
   background: var(--kpi-bg); display: flex; flex-direction: column; gap: 0.55rem;
 }
-.watch-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
+.watch-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; cursor: pointer; list-style: none; }
+.watch-head::-webkit-details-marker { display: none; }
 .watch-ticker { font-weight: 600; font-size: 1rem; }
+.watch-name { display: block; margin-top: 0.1rem; }
 .watch-price { font-variant-numeric: tabular-nums; font-weight: 600; }
+.watch-card details[open] .watch-head { margin-bottom: 0.45rem; }
 .watch-stats { display: flex; gap: 0.85rem; font-size: 0.82rem; flex-wrap: wrap; }
 .watch-stats > span { color: var(--muted); }
 .watch-stats > span .up, .watch-stats > span .down { font-weight: 600; }
@@ -1167,15 +1351,17 @@ def main() -> None:
     cash = holdings_data["cash"] if holdings_data["cash"] is not None else portfolio["cash"]
     sparplan = portfolio.get("sparplan") or 0.0
     holdings_stale = not holdings_data["holdings"] and not holdings_data["generated_at"]
+    portfolio_total = priced_portfolio_total(holdings, cash or 0.0, snapshot, eurusd)
 
     parts = [
         HEAD.replace("__CSS__", CSS),
         build_banner(trade_log),
+        build_decision_summary(holdings, cash or 0.0, snapshot, eurusd, trade_log),
         build_macro(latest, snapshot),
         build_allocation(holdings, cash or 0.0, snapshot, eurusd),
         build_holdings(holdings, snapshot, eurusd),
-        build_opportunities(snapshot),
-        build_watchlist(candidates, snapshot),
+        build_opportunities(snapshot, portfolio_total, eurusd),
+        build_watchlist(candidates, snapshot, portfolio_total, eurusd),
         build_timeline(trade_log),
         build_flags(holdings, cash, sparplan, snapshot, holdings_stale),
         build_prose(latest["full_html"]),
